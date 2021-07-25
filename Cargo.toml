@@ -17,10 +17,11 @@ lto = true
 openblas = ["ndarray-linalg/openblas"]
 netlib = ["ndarray-linalg/netlib"]
 intel-mkl = ["ndarray-linalg/intel-mkl"]
-
+parallelism = ["rayon"]
 
 [dependencies]
 log = "0.4.14"
 num-traits = "0.2"
 ndarray = "0.15.3"
 ndarray-linalg = {version = "0.14.0"}
+rayon = { version = "1.5.1", optional = true}
