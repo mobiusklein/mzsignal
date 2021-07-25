@@ -1,0 +1,26 @@
+[package]
+name = "mzsignal"
+version = "0.1.0"
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "mzsignal"
+src = "src/lib.rs"
+
+[profile.release]
+lto = true
+
+# local dependency crate
+[features]
+openblas = ["ndarray-linalg/openblas"]
+netlib = ["ndarray-linalg/netlib"]
+intel-mkl = ["ndarray-linalg/intel-mkl"]
+
+
+[dependencies]
+log = "0.4.14"
+num-traits = "0.2"
+ndarray = "0.15.3"
+ndarray-linalg = {version = "0.14.0"}
