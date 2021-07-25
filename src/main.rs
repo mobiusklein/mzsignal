@@ -31,7 +31,7 @@ fn main() -> io::Result<()> {
     averager.push(ArrayPair::new(&X, &Y));
     let start = Instant::now();
     let rebinned = averager.interpolate();
-    println!("Rebinning took seconds {}", (Instant::now() - start).as_secs());
+    println!("Rebinning took milliseconds {}", (Instant::now() - start).as_millis());
     picker.signal_to_noise_threshold = 1.0;
     let mut acc2 = Vec::new();
     let count = picker.discover_peaks(&averager.mz_grid, &rebinned, &mut acc2);
@@ -46,7 +46,7 @@ fn main() -> io::Result<()> {
     };
     let start = Instant::now();
     let rebinned_3 = averager.interpolate_chunks(3);
-    println!("Rebinning took seconds {}", (Instant::now() - start).as_secs());
+    println!("Rebinning took milliseconds {}", (Instant::now() - start).as_millis());
     let mut acc3 = Vec::new();
     let count = picker.discover_peaks(&averager.mz_grid, &rebinned_3, &mut acc3);
     match count {
@@ -63,8 +63,8 @@ fn main() -> io::Result<()> {
     {
         println!("Parallel Method");
         let start = Instant::now();
-        let rebinned_5 = averager.interpolate_chunks_parallel(5);
-        println!("Rebinning took seconds {}", (Instant::now() - start).as_secs());
+        let rebinned_5 = averager.interpolate_chunks_parallel(6);
+        println!("Rebinning took milliseconds {}", (Instant::now() - start).as_millis());
         let mut acc5 = Vec::new();
         let count = picker.discover_peaks(&averager.mz_grid, &rebinned_5, &mut acc5);
         match count {

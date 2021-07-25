@@ -154,7 +154,6 @@ impl<'lifespan, 'transient: 'lifespan> SignalAverager<'lifespan> {
             } else {
                 (points_per_chunk, self.mz_grid[offset], self.mz_grid[offset + points_per_chunk])
             };
-            println!("Interpolating Chunk {}-{} ({})", start_mz, end_mz, size);
             let mut sub = self.create_intensity_array_of_size(size);
             self.interpolate_into(&mut sub, start_mz, end_mz);
             (result[offset..offset + size]).copy_from_slice(&sub);
@@ -178,7 +177,6 @@ impl<'lifespan, 'transient: 'lifespan> SignalAverager<'lifespan> {
             } else {
                 (points_per_chunk, self.mz_grid[offset], self.mz_grid[offset + points_per_chunk])
             };
-            println!("Interpolating Chunk {}-{} ({})", start_mz, end_mz, size);
             let mut sub = self.create_intensity_array_of_size(size);
             self.interpolate_into(&mut sub, start_mz, end_mz);
             let mut out = locked_result.lock().unwrap();
