@@ -1,81 +1,63 @@
+#![allow(dead_code,unused_variables,unused_imports)]
+use std::env;
+use std::process;
+use std::fs;
 use std::io;
-use std::time::{Instant};
+use std::io::prelude::*;
 
 use mzsignal::peak::FittedPeak;
 use mzsignal::peak_picker;
-use mzsignal::test_data::{NOISE, X, Y};
-use mzsignal::average::{SignalAverager, ArrayPair};
 
 fn main() -> io::Result<()> {
-    let mut picker = peak_picker::PeakPicker::default();
-    picker.signal_to_noise_threshold = 10.0;
-    picker.intensity_threshold = 1.0;
-    let mut acc: Vec<FittedPeak> = Vec::new();
-    let yhat: Vec<f32> = Y
-        .iter()
-        .zip(NOISE.iter())
-        .map(|(y, e)| y * 5.0 + e)
-        .collect();
-    let count = picker.discover_peaks(&X, &yhat, &mut acc);
-    match count {
-        Ok(count) => {
-            println!("Found {} peaks", count);
-            for peak in acc.iter() {
-                println!("\t{}", peak);
-            }
-        }
-        Err(err) => println!("Encountered error {:?}", err),
+    let args: Vec<String> = env::args().collect();
+    let path = if args.len() > 1 {
+        &args[1]
+    } else {
+        println!("Usage: mzsignal < path OR - >");
+        process::exit(1);
     };
-
-    let mut averager = SignalAverager::new(X[0], X[X.len() - 1], 0.00001);
-    averager.push(ArrayPair::new(&X, &Y));
-    let start = Instant::now();
-    let rebinned = averager.interpolate();
-    println!("Rebinning took milliseconds {}", (Instant::now() - start).as_millis());
-    picker.signal_to_noise_threshold = 1.0;
-    let mut acc2 = Vec::new();
-    let count = picker.discover_peaks(&averager.mz_grid, &rebinned, &mut acc2);
-    match count {
-        Ok(count) => {
-            println!("Found {} peaks after re-binning", count);
-            for peak in acc2.iter() {
-                println!("\t{}", peak);
-            }
+    let mut mz_array: Vec<f64> = Vec::new();
+    let mut intensity_array: Vec<f32> = Vec::new();
+    if path != "-" {
+        let reader = io::BufReader::new(fs::File::open(path)?);
+        for line in reader.lines() {
+            let line = line.unwrap();
+            let pref = line.trim();
+            let chunks: Vec<&str> = pref.split("\t").collect();
+            mz_array.push(chunks[0].parse::<f64>().expect("Expected number for m/z"));
+            intensity_array.push(chunks[1].parse::<f32>().expect("Expected number for intensity"));
         }
-        Err(err) => println!("Encountered error {:?}", err),
-    };
-    let start = Instant::now();
-    let rebinned_3 = averager.interpolate_chunks(3);
-    println!("Rebinning took milliseconds {}", (Instant::now() - start).as_millis());
-    let mut acc3 = Vec::new();
-    let count = picker.discover_peaks(&averager.mz_grid, &rebinned_3, &mut acc3);
-    match count {
-        Ok(count) => {
-            println!("Found {} peaks after re-binning", count);
-            for peak in acc3.iter() {
-                println!("\t{}", peak);
-            }
+        eprintln!("Read {} items from {}", mz_array.len(), path);
+    } else {
+        let stream = io::stdin();
+        let reader = stream.lock();
+        for line in reader.lines() {
+            let line = line.unwrap();
+            let pref = line.trim();
+            let chunks: Vec<&str> = pref.split("\t").collect();
+            mz_array.push(chunks[0].parse::<f64>().expect("Expected number for m/z"));
+            intensity_array.push(chunks[1].parse::<f32>().expect("Expected number for intensity"));
         }
-        Err(err) => println!("Encountered error {:?}", err),
-    };
-
-    #[cfg(feature = "parallelism")]
-    {
-        println!("Parallel Method");
-        let start = Instant::now();
-        let rebinned_5 = averager.interpolate_chunks_parallel(6);
-        println!("Rebinning took milliseconds {}", (Instant::now() - start).as_millis());
-        let mut acc5 = Vec::new();
-        let count = picker.discover_peaks(&averager.mz_grid, &rebinned_5, &mut acc5);
-        match count {
-            Ok(count) => {
-                println!("Found {} peaks after re-binning", count);
-                for peak in acc5.iter() {
-                    println!("\t{}", peak);
-                }
-            }
-            Err(err) => println!("Encountered error {:?}", err),
-        };
+        eprintln!("Read {} items from STDIN", mz_array.len());
+    }
+    let picker = peak_picker::PeakPicker::default();
+    let mut acc = Vec::new();
+    match picker.discover_peaks(&mz_array, &intensity_array, &mut acc) {
+        Ok(count) => {
+            eprintln!("Found {} peaks", count);
+        },
+        Err(msg) => {
+            eprintln!("Encountered an error while picking peaks: {:?}", msg);
+        }
+    }
+    let outstream = io::stdout();
+    let mut writer = outstream.lock();
+    writer.write(b"mz\tintensity\tsnr\tfwhm\n")?;
+    for peak in acc {
+        writer.write(format!(
+            "{}\t{}\t{}\t{}\n",
+            peak.mz, peak.intensity, peak.signal_to_noise,
+            peak.full_width_at_half_max).as_bytes())?;
     }
     Ok(())
 }

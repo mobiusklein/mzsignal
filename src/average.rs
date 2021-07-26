@@ -197,3 +197,53 @@ impl<'lifespan, 'transient: 'lifespan> SignalAverager<'lifespan> {
 }
 
 
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::test_data::{X, Y};
+    use crate::peak_picker::PeakPicker;
+
+
+    #[test]
+    fn test_rebin_one() {
+        let mut averager = SignalAverager::new(X[0], X[X.len() - 1], 0.00001);
+        averager.push(ArrayPair::new(&X, &Y));
+        let yhat = averager.interpolate();
+        let picker = PeakPicker::default();
+        let mut acc = Vec::new();
+        picker.discover_peaks(&averager.mz_grid, &yhat, &mut acc).expect("Signal can be picked");
+        let mzs = [180.0633881, 181.06338858024316, 182.06338874740308];
+        for (peak, mz) in acc.iter().zip(mzs.iter()) {
+            assert!((peak.mz - mz).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn test_rebin_chunked() {
+        let mut averager = SignalAverager::new(X[0], X[X.len() - 1], 0.00001);
+        averager.push(ArrayPair::new(&X, &Y));
+        let yhat = averager.interpolate_chunks(3);
+        let picker = PeakPicker::default();
+        let mut acc = Vec::new();
+        picker.discover_peaks(&averager.mz_grid, &yhat, &mut acc).expect("Signal can be picked");
+        let mzs = [180.0633881, 181.06338858024316, 182.06338874740308];
+        for (peak, mz) in acc.iter().zip(mzs.iter()) {
+            assert!((peak.mz - mz).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "parallelism")]
+    fn test_rebin_parallel() {
+        let mut averager = SignalAverager::new(X[0], X[X.len() - 1], 0.00001);
+        averager.push(ArrayPair::new(&X, &Y));
+        let yhat = averager.interpolate_chunks_parallel(6);
+        let picker = PeakPicker::default();
+        let mut acc = Vec::new();
+        picker.discover_peaks(&averager.mz_grid, &yhat, &mut acc).expect("Signal can be picked");
+        let mzs = [180.0633881, 181.06338858024316, 182.06338874740308];
+        for (peak, mz) in acc.iter().zip(mzs.iter()) {
+            assert!((peak.mz - mz).abs() < 1e-6);
+        }
+    }
+}
