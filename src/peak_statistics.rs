@@ -28,7 +28,11 @@ where
 const MINIMUM_SIGNAL_TO_NOISE: f32 = 4.0;
 const MAX_WIDTH: f64 = 1.5;
 
-pub fn approximate_signal_to_noise<Y: Float + FromPrimitive>(target_val: Y, intensity_array: &[Y], index: usize) -> Y {
+pub fn approximate_signal_to_noise<Y: Float + FromPrimitive>(
+    target_val: Y,
+    intensity_array: &[Y],
+    index: usize,
+) -> Y {
     let mut min_intensity_left: Y = Y::from_f64(0.0).unwrap();
     let mut min_intensity_right: Y = Y::from_f64(0.0).unwrap();
     let n = intensity_array.len() - 1;

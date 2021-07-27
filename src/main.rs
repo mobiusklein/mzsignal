@@ -1,9 +1,9 @@
-#![allow(dead_code,unused_variables,unused_imports)]
+#![allow(dead_code, unused_variables, unused_imports)]
 use std::env;
-use std::process;
 use std::fs;
 use std::io;
 use std::io::prelude::*;
+use std::process;
 
 use mzsignal::peak::FittedPeak;
 use mzsignal::peak_picker;
@@ -25,7 +25,11 @@ fn main() -> io::Result<()> {
             let pref = line.trim();
             let chunks: Vec<&str> = pref.split("\t").collect();
             mz_array.push(chunks[0].parse::<f64>().expect("Expected number for m/z"));
-            intensity_array.push(chunks[1].parse::<f32>().expect("Expected number for intensity"));
+            intensity_array.push(
+                chunks[1]
+                    .parse::<f32>()
+                    .expect("Expected number for intensity"),
+            );
         }
         eprintln!("Read {} items from {}", mz_array.len(), path);
     } else {
@@ -36,7 +40,11 @@ fn main() -> io::Result<()> {
             let pref = line.trim();
             let chunks: Vec<&str> = pref.split("\t").collect();
             mz_array.push(chunks[0].parse::<f64>().expect("Expected number for m/z"));
-            intensity_array.push(chunks[1].parse::<f32>().expect("Expected number for intensity"));
+            intensity_array.push(
+                chunks[1]
+                    .parse::<f32>()
+                    .expect("Expected number for intensity"),
+            );
         }
         eprintln!("Read {} items from STDIN", mz_array.len());
     }
@@ -45,7 +53,7 @@ fn main() -> io::Result<()> {
     match picker.discover_peaks(&mz_array, &intensity_array, &mut acc) {
         Ok(count) => {
             eprintln!("Found {} peaks", count);
-        },
+        }
         Err(msg) => {
             eprintln!("Encountered an error while picking peaks: {:?}", msg);
         }
@@ -54,10 +62,13 @@ fn main() -> io::Result<()> {
     let mut writer = outstream.lock();
     writer.write(b"mz\tintensity\tsnr\tfwhm\n")?;
     for peak in acc {
-        writer.write(format!(
-            "{}\t{}\t{}\t{}\n",
-            peak.mz, peak.intensity, peak.signal_to_noise,
-            peak.full_width_at_half_max).as_bytes())?;
+        writer.write(
+            format!(
+                "{}\t{}\t{}\t{}\n",
+                peak.mz, peak.intensity, peak.signal_to_noise, peak.full_width_at_half_max
+            )
+            .as_bytes(),
+        )?;
     }
     Ok(())
 }

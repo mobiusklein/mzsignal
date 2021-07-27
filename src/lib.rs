@@ -42,14 +42,16 @@
 //! as a backend for `ndarray-linalg`. These are enabled by passing one of the supported backends
 //! as a `feature` to `cargo` e.g.:
 #![allow(unused_imports)]
+pub mod average;
+pub mod denoise;
+pub mod histogram;
 pub mod peak;
 pub mod peak_picker;
 pub mod peak_statistics;
 pub mod search;
-pub mod average;
 
 #[cfg(test)]
 mod test_data;
 
 pub use crate::peak::FittedPeak;
-pub use crate::peak_picker::{PeakFitType, PeakPicker, PeakPickerError, pick_peaks};
+pub use crate::peak_picker::{pick_peaks, PeakFitType, PeakPicker, PeakPickerError};
