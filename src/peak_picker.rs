@@ -303,7 +303,7 @@ impl PeakPicker {
     }
 
     #[cfg(feature = "parallelism")]
-    pub fn discover_peaks_parallel(
+    fn discover_peaks_parallel(
         &self,
         mz_array: &[f64],
         intensity_array: &[f32],
