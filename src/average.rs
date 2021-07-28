@@ -134,6 +134,7 @@ impl<'lifespan, 'transient: 'lifespan> SignalAverager<'lifespan> {
     pub fn interpolate_into(&self, out: &mut [f32], start_mz: f64, end_mz: f64) -> usize {
         let offset = self.find_offset(start_mz);
         let stop_index = self.find_offset(end_mz);
+        // println!("stop_index {} offset {} total {} out.len() {}", stop_index, offset, stop_index - offset, out.len());
         assert!(stop_index - offset == out.len());
 
         for block in self.array_pairs.iter() {
@@ -194,7 +195,7 @@ impl<'lifespan, 'transient: 'lifespan> SignalAverager<'lifespan> {
     }
 
     #[cfg(feature = "parallelism")]
-    pub fn interpolate_chunks_parallel(&'lifespan self, n_chunks: usize) -> Vec<f32> {
+    pub fn interpolate_chunks_parallel_locked(&'lifespan self, n_chunks: usize) -> Vec<f32> {
         let result = self.create_intensity_array();
         if self.array_pairs.is_empty() {
             return result;
@@ -215,10 +216,34 @@ impl<'lifespan, 'transient: 'lifespan> SignalAverager<'lifespan> {
             };
             let mut sub = self.create_intensity_array_of_size(size);
             self.interpolate_into(&mut sub, start_mz, end_mz);
+
             let mut out = locked_result.lock().unwrap();
             (out[offset..offset + size]).copy_from_slice(&sub);
         });
         locked_result.into_inner().unwrap()
+    }
+
+    #[cfg(feature = "parallelism")]
+    pub fn interpolate_chunks_parallel(&'lifespan self, n_chunks: usize) -> Vec<f32> {
+        let mut result = self.create_intensity_array();
+        if self.array_pairs.is_empty() {
+            return result;
+        }
+        let n_points = self.points_between(self.mz_start, self.mz_end);
+        let points_per_chunk = n_points / n_chunks;
+        let mz_chunks: Vec<&[f64]> = self.mz_grid.chunks(points_per_chunk).collect();
+        let mut intensity_chunks: Vec<&mut [f32]> = result.chunks_mut(points_per_chunk).collect();
+
+        intensity_chunks[..]
+            .par_iter_mut()
+            .zip(mz_chunks[..].par_iter())
+            .for_each(|(mut intensity_chunk, mz_chunk)| {
+                let start_mz = mz_chunk.first().unwrap();
+                // The + 1e-6 is just a gentle push to get interpolate_into to roll over to the last position in the chunk
+                let end_mz = mz_chunk.last().unwrap() + 1e-6;
+                self.interpolate_into(&mut intensity_chunk, *start_mz, end_mz);
+            });
+        result
     }
 
     pub fn interpolate(&'lifespan self) -> Vec<f32> {
@@ -259,6 +284,23 @@ mod test {
         let mut averager = SignalAverager::new(X[0], X[X.len() - 1], 0.00001);
         averager.push(ArrayPair::new(&X, &Y));
         let yhat = averager.interpolate_chunks(3);
+        let picker = PeakPicker::default();
+        let mut acc = Vec::new();
+        picker
+            .discover_peaks(&averager.mz_grid, &yhat, &mut acc)
+            .expect("Signal can be picked");
+        let mzs = [180.0633881, 181.06338858024316, 182.06338874740308];
+        for (peak, mz) in acc.iter().zip(mzs.iter()) {
+            assert!((peak.mz - mz).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "parallelism")]
+    fn test_rebin_parallel_locked() {
+        let mut averager = SignalAverager::new(X[0], X[X.len() - 1], 0.00001);
+        averager.push(ArrayPair::new(&X, &Y));
+        let yhat = averager.interpolate_chunks_parallel_locked(6);
         let picker = PeakPicker::default();
         let mut acc = Vec::new();
         picker

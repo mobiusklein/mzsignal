@@ -287,7 +287,6 @@ pub fn group_windows_by_width<'lifespan>(
     result
 }
 
-
 #[derive(Debug, Clone, Copy)]
 pub enum DenoisingError {}
 
@@ -307,11 +306,10 @@ impl Default for SignalBackgroundDenoiser {
     fn default() -> SignalBackgroundDenoiser {
         SignalBackgroundDenoiser {
             window_size: 1.0,
-            region_size: 10
+            region_size: 10,
         }
     }
 }
-
 
 impl<'transient, 'lifespan: 'transient> SignalBackgroundDenoiser {
     pub fn prepare_spectrum(
@@ -328,7 +326,10 @@ impl<'transient, 'lifespan: 'transient> SignalBackgroundDenoiser {
         pair
     }
 
-    pub fn denoise_inplace(&self, pair: &'lifespan mut DenoisingArrayPair) -> Result<f32, DenoisingError>{
+    pub fn denoise_inplace(
+        &self,
+        pair: &'lifespan mut DenoisingArrayPair,
+    ) -> Result<f32, DenoisingError> {
         let mut windows = windowed_spectrum(pair.mz_array, pair.intensity_array, self.window_size);
         let mut regions = group_windows_by_width(&mut windows, self.region_size);
         let mut total = 0.0;
@@ -340,7 +341,12 @@ impl<'transient, 'lifespan: 'transient> SignalBackgroundDenoiser {
         Ok(average_noise_reduction)
     }
 
-    pub fn denoise(&self, mz_array: &[f64], intensity_array: &mut [f32], scale: f32) -> Result<f32, DenoisingError>{
+    pub fn denoise(
+        &self,
+        mz_array: &[f64],
+        intensity_array: &mut [f32],
+        scale: f32,
+    ) -> Result<f32, DenoisingError> {
         let mut pair = self.prepare_spectrum(mz_array, intensity_array, scale);
         let average_noise_reduction = self.denoise_inplace(&mut pair);
         average_noise_reduction
@@ -350,8 +356,8 @@ impl<'transient, 'lifespan: 'transient> SignalBackgroundDenoiser {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::test_data::{NOISE, X, Y};
     use crate::peak_picker::PeakPicker;
+    use crate::test_data::{NOISE, X, Y};
 
     use std::fs;
     use std::io;

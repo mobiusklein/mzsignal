@@ -1,10 +1,14 @@
+#[cfg(feature = "parallelism")]
+use rayon::prelude::*;
 use std::cmp;
+use std::ops;
 
 use crate::peak::FittedPeak;
 use crate::peak_statistics::{
     approximate_signal_to_noise, full_width_at_half_max, quadratic_fit, WidthFit,
 };
 use crate::search::{nearest, nearest_binary};
+use std::collections::btree_map::{BTreeMap, Entry};
 
 #[derive(Debug, Clone, Copy)]
 pub enum PeakFitType {
@@ -50,6 +54,7 @@ impl PartialPeakFit {
 pub enum PeakPickerError {
     Unknown,
     MZIntensityMismatch,
+    IntervalTooSmall,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -207,6 +212,116 @@ impl PeakPicker {
         }
         Ok(peak_accumulator.len() - m)
     }
+
+    #[cfg(feature = "parallelism")]
+    fn discover_peaks_parallel_with_overhang(
+        &self,
+        mz_array: &[f64],
+        intensity_array: &[f32],
+        peak_accumulator: &mut Vec<FittedPeak>,
+        n_chunks: usize,
+        overhang: usize,
+    ) -> Result<usize, PeakPickerError> {
+        let n = mz_array.len();
+        let chunk_size = n / n_chunks;
+        println!("Chunk size: {}, Overhang: {}", chunk_size, overhang);
+        if chunk_size <= overhang {
+            return self.discover_peaks(mz_array, intensity_array, peak_accumulator)
+        }
+        let windows: Vec<ops::Range<usize>> = (0..n_chunks)
+            .map(|i| (if i == 0 {0} else {i * chunk_size - overhang})..cmp::min((i + 1) * chunk_size + overhang, n))
+            .collect();
+        println!("Windows: {:?}", windows);
+        let peaks_or_errors: Vec<Result<(Vec<FittedPeak>, ops::Range<usize>), PeakPickerError>> =
+            windows
+                .into_par_iter()
+                .map(|iv| {
+                    let mut local_acc: Vec<FittedPeak> = Vec::new();
+                    let start_idx = iv.start;
+                    let end_idx = iv.end;
+
+                    match self.discover_peaks(
+                        &mz_array[start_idx..end_idx],
+                        &intensity_array[start_idx..end_idx],
+                        &mut local_acc,
+                    ) {
+                        Ok(_i) => {
+                            let res: Vec<FittedPeak> = local_acc
+                                .into_iter()
+                                .map(|mut p| {
+                                    // Shift the indices forwards to match the "real" coordinates
+                                    p.index += start_idx as u32;
+                                    p
+                                })
+                                // If the peak's index falls within either overhang, drop it
+                                .filter(|p| {
+                                    (p.index - start_idx as u32 > overhang as u32 || start_idx == 0) &&
+                                        (end_idx == n || p.index < (end_idx - overhang) as u32)
+                                })
+                                .collect();
+
+                            Ok((res, iv))
+                        }
+                        Err(e) => Err(e),
+                    }
+                })
+                .collect();
+
+        let mut ivmap: BTreeMap<usize, Vec<FittedPeak>> = BTreeMap::new();
+
+        // Iterate over each chunk, inserting it into an ordered map. If
+        // there are multiple intervals with the same start that both have
+        // peaks, an error is returned. If any of the chunks return an error,
+        // an error is returned.
+        for por in peaks_or_errors {
+            match por {
+                Ok((peaks, iv)) => {
+                    let s = iv.start;
+                    match ivmap.entry(s) {
+                        Entry::Vacant(entry) => {
+                            entry.insert(peaks);
+                        }
+                        Entry::Occupied(mut entry) => {
+                            if entry.get().len() == 0 {
+                                entry.insert(peaks);
+                            } else if peaks.len() == 0 {
+                            } else {
+                                return Err(PeakPickerError::IntervalTooSmall);
+                            };
+                        }
+                    }
+                }
+                Err(err) => return Err(err.clone()),
+            };
+        }
+
+        for (_start, peaks) in ivmap {
+            peak_accumulator.extend(peaks);
+        }
+
+        Ok(peak_accumulator.len())
+    }
+
+    #[cfg(feature = "parallelism")]
+    pub fn discover_peaks_parallel(
+        &self,
+        mz_array: &[f64],
+        intensity_array: &[f32],
+        peak_accumulator: &mut Vec<FittedPeak>,
+        n_chunks: usize,
+    ) -> Result<usize, PeakPickerError> {
+        let n = mz_array.len();
+        let chunk_size = n / n_chunks;
+        let overhang = cmp::max(chunk_size / 2, 15);
+        self.discover_peaks_parallel_with_overhang(
+            mz_array,
+            intensity_array,
+            peak_accumulator,
+            n_chunks,
+            // This value needs to reflect ~twice the number of data points on a peak
+            overhang,
+        )
+    }
 }
 
 pub fn pick_peaks(
@@ -226,7 +341,9 @@ pub fn pick_peaks(
 #[cfg(test)]
 mod test {
     use super::*;
+    use rstest::rstest;
     use crate::test_data::{NOISE, X, Y};
+    use crate::average::{SignalAverager, ArrayPair};
 
     #[test]
     fn test_peak_picker_no_noise() {
@@ -277,5 +394,53 @@ mod test {
         let result = picker.discover_peaks(&X, &yhat, &mut acc);
         let z = result.expect("Should not encounter an error");
         assert_eq!(z, 5);
+    }
+
+    #[test]
+    #[cfg(feature = "parallelism")]
+    fn test_peak_picker_no_noise_parallel() {
+        let picker = PeakPicker::default();
+        let mut acc = Vec::new();
+        let result = picker.discover_peaks_parallel(&X, &Y, &mut acc, 6);
+        let z = result.expect("Should not encounter an error");
+        assert_eq!(z, 4);
+        let xs = [
+            180.0633881,
+            181.06578875772615,
+            182.06662482711,
+            183.06895705008014,
+        ];
+        for (peak, x) in acc.iter().zip(xs.iter()) {
+            assert!((peak.mz - x).abs() < 1e-6);
+        }
+    }
+
+    // This test is expected to fail because the hacky logic used in the tested method
+    // does not work on it at the desired precision. The overhangs need to be computed
+    // dynamically.
+    #[rstest]
+    #[should_panic]
+    #[cfg(feature = "parallelism")]
+    fn test_peak_picker_no_noise_parallel_rebinned() {
+        let picker = PeakPicker::default();
+        let mut acc = Vec::new();
+
+        let mut averager = SignalAverager::new(X[0], X[X.len() - 1], 0.0001);
+        averager.push(ArrayPair::new(&X, &Y));
+        let yhat = averager.interpolate();
+
+        let result = picker.discover_peaks_parallel(&averager.mz_grid, &yhat, &mut acc, 6);
+        let z = result.expect("Should not encounter an error");
+        assert_eq!(z, 4);
+        let xs = [
+            180.0633881,
+            181.06578875772615,
+            182.06662482711,
+            183.06895705008014,
+        ];
+        for (peak, x) in acc.iter().zip(xs.iter()) {
+            println!("{} ? {}", peak, x);
+            assert!((peak.mz - x).abs() < 1e-6);
+        }
     }
 }
