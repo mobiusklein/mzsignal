@@ -36,9 +36,8 @@ pub fn approximate_signal_to_noise<Y: Float + FromPrimitive>(
     let mut min_intensity_left: Y = Y::from_f64(0.0).unwrap();
     let mut min_intensity_right: Y = Y::from_f64(0.0).unwrap();
     let n = intensity_array.len() - 1;
-    if aboutzero(target_val) {
-        return Y::from_f64(0.0).unwrap();
-    } else if index <= 0 || index >= n {
+
+    if aboutzero(target_val) || index == 0 || index >= n {
         return Y::from_f64(0.0).unwrap();
     }
 
@@ -78,9 +77,9 @@ pub fn approximate_signal_to_noise<Y: Float + FromPrimitive>(
         }
     }
     if min_intensity_right < min_intensity_left && aboutzero(min_intensity_right) {
-        return target_val / min_intensity_right;
+        target_val / min_intensity_right
     } else {
-        return target_val / min_intensity_left;
+        target_val / min_intensity_left
     }
 }
 
@@ -270,7 +269,7 @@ pub fn full_width_at_half_max(
     }
 
     let n = mz_array.len() - 1;
-    if data_index <= 0 || data_index > n {
+    if data_index == 0 || data_index > n {
         return fit;
     }
 
@@ -290,15 +289,15 @@ pub fn full_width_at_half_max(
     } else {
         fit.full_width_at_half_max = falling_side_width - rising_side_width;
     }
-    return fit;
+    fit
 }
 
 pub fn quadratic_fit(mz_array: &[f64], intensity_array: &[f32], index: usize) -> f64 {
     let n = mz_array.len() - 1;
     if index < 1 {
-        return mz_array[0];
+        mz_array[0]
     } else if index > n {
-        return mz_array[n];
+        mz_array[n]
     } else {
         let x1 = mz_array[index - 1];
         let x2 = mz_array[index];
@@ -308,10 +307,10 @@ pub fn quadratic_fit(mz_array: &[f64], intensity_array: &[f32], index: usize) ->
         let y3 = intensity_array[index + 1] as f64;
         let d = (y2 - y1) * (x3 - x2) - (y3 - y2) * (x2 - x1);
         if aboutzero(d) {
-            return x2;
+            x2
         } else {
-            let mz_fit = ((x1 + x2) - ((y2 - y1) * (x3 - x2) * (x1 - x3)) / d) / 2.0;
-            return mz_fit;
+            // mz_fit
+            ((x1 + x2) - ((y2 - y1) * (x3 - x2) * (x1 - x3)) / d) / 2.0
         }
     }
 }

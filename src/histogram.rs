@@ -4,7 +4,7 @@ pub fn percentile<T: Float + ToPrimitive>(values: &[T], percent: f64) -> T {
     let k = (values.len() - 1) as f64 * percent;
     let f = k.floor();
     let c = k.ceil();
-    if f == c {
+    if (f - c).abs() < 1e-6 {
         return values[k as usize];
     }
     let d0 = values[f as usize] * T::from(c - k).unwrap();
@@ -94,5 +94,9 @@ impl<T: Float + Default + FromPrimitive> Histogram<T> {
 
     pub fn len(&self) -> usize {
         self.bin_count.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }

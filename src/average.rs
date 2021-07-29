@@ -4,18 +4,9 @@ use std::ops::{Add, Index};
 use rayon::prelude::*;
 use std::sync::Mutex;
 
-use crate::search;
 use num_traits::{Float, ToPrimitive};
-
-pub fn gridspace<T: Float + ToPrimitive>(start: T, end: T, step: T) -> Vec<T> {
-    let distance = end - start;
-    let steps = (distance / step).to_usize().unwrap();
-    let mut result = Vec::with_capacity(steps);
-    for i in 0..steps {
-        result.push(start + T::from(i).unwrap() * step);
-    }
-    result
-}
+use crate::search;
+use crate::arrayops::gridspace;
 
 #[derive(Debug, Default)]
 pub struct ArrayPair<'lifespan> {
@@ -60,11 +51,15 @@ impl<'lifespan> ArrayPair<'lifespan> {
         self.mz_array.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     pub fn get(&self, i: usize) -> Option<(f64, f32)> {
         if i >= self.len() {
-            return None;
+            None
         } else {
-            return Some((self.mz_array[i], self.intensity_array[i]));
+            Some((self.mz_array[i], self.intensity_array[i]))
         }
     }
 }

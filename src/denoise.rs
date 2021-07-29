@@ -8,7 +8,7 @@ use num_traits::Float;
 use crate::histogram::Histogram;
 use crate::search;
 
-pub struct Window<'lifespan> {
+struct Window<'lifespan> {
     pub mz_array: &'lifespan [f64],
     pub intensity_array: &'lifespan mut [f32],
     pub start_index: usize,
@@ -100,7 +100,7 @@ impl<'transient, 'lifespan: 'transient> Window<'lifespan> {
     }
 }
 
-pub struct NoiseRegion<'lifespan> {
+struct NoiseRegion<'lifespan> {
     pub windows: &'lifespan mut [Window<'lifespan>],
     pub width: u32,
     pub start_index: usize,
@@ -194,7 +194,7 @@ impl<'lifespan> ops::IndexMut<usize> for NoiseRegion<'lifespan> {
     }
 }
 
-pub fn windowed_spectrum<'lifespan>(
+fn windowed_spectrum<'lifespan>(
     mz_array: &'lifespan [f64],
     intensity_array: &'lifespan mut [f32],
     window_size: f64,
@@ -248,12 +248,12 @@ pub fn windowed_spectrum<'lifespan>(
                 true,
             ))
         }
-        center_mz = center_mz + window_size;
+        center_mz += window_size;
     }
-    return windows;
+    windows
 }
 
-pub fn group_windows_by_width<'lifespan>(
+fn group_windows_by_width<'lifespan>(
     windows: &'lifespan mut [Window<'lifespan>],
     width: u32,
 ) -> Vec<NoiseRegion<'lifespan>> {
@@ -318,12 +318,11 @@ impl<'transient, 'lifespan: 'transient> SignalBackgroundDenoiser {
         intensity_array: &'lifespan mut [f32],
         scale: f32,
     ) -> DenoisingArrayPair<'lifespan> {
-        let pair = DenoisingArrayPair {
+        DenoisingArrayPair {
             mz_array,
             intensity_array,
             scale,
-        };
-        pair
+        }
     }
 
     pub fn denoise_inplace(
@@ -348,8 +347,31 @@ impl<'transient, 'lifespan: 'transient> SignalBackgroundDenoiser {
         scale: f32,
     ) -> Result<f32, DenoisingError> {
         let mut pair = self.prepare_spectrum(mz_array, intensity_array, scale);
-        let average_noise_reduction = self.denoise_inplace(&mut pair);
-        average_noise_reduction
+        // average noise reduction
+        self.denoise_inplace(&mut pair)
+    }
+}
+
+/// Remove background noise from a spectrum in place, returning the same slice of memory
+/// # Arguments
+/// * `mz_array` - The m/z array for the spectrum. This _should_ be relatively evenly spaced for the
+///                assumptions of this algorithm to work, so a profile spectrum is recommended.
+/// * `intensity_array` - The intensity for each m/z in the spectrum. This buffer will be modified
+///                       in place, removing background noise using the `MasSpike` algorithm and
+///                       is carried forward as the return value.
+/// * `scale` - The multiplicity of the noise to remove. When `scale` is small, local noise levels may
+///             be exhausted in one window before the noise is appreciably depleted in the region, leading
+///             to still-noisy spectra.
+///
+pub fn denoise<'a>(
+    mz_array: &'a [f64],
+    intensity_array: &'a mut [f32],
+    scale: f32,
+) -> Result<&'a [f32], DenoisingError> {
+    let denoiser = SignalBackgroundDenoiser::default();
+    match denoiser.denoise(mz_array, intensity_array, scale) {
+        Ok(_noise) => Ok(intensity_array),
+        Err(err) => Err(err),
     }
 }
 

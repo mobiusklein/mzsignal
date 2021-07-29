@@ -23,7 +23,7 @@ fn main() -> io::Result<()> {
         for line in reader.lines() {
             let line = line.unwrap();
             let pref = line.trim();
-            let chunks: Vec<&str> = pref.split("\t").collect();
+            let chunks: Vec<&str> = pref.split('\t').collect();
             mz_array.push(chunks[0].parse::<f64>().expect("Expected number for m/z"));
             intensity_array.push(
                 chunks[1]
@@ -38,7 +38,7 @@ fn main() -> io::Result<()> {
         for line in reader.lines() {
             let line = line.unwrap();
             let pref = line.trim();
-            let chunks: Vec<&str> = pref.split("\t").collect();
+            let chunks: Vec<&str> = pref.split('\t').collect();
             mz_array.push(chunks[0].parse::<f64>().expect("Expected number for m/z"));
             intensity_array.push(
                 chunks[1]
@@ -60,9 +60,9 @@ fn main() -> io::Result<()> {
     }
     let outstream = io::stdout();
     let mut writer = outstream.lock();
-    writer.write(b"mz\tintensity\tsnr\tfwhm\n")?;
+    writer.write_all(b"mz\tintensity\tsnr\tfwhm\n")?;
     for peak in acc {
-        writer.write(
+        writer.write_all(
             format!(
                 "{}\t{}\t{}\t{}\n",
                 peak.mz, peak.intensity, peak.signal_to_noise, peak.full_width_at_half_max

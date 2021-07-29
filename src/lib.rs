@@ -49,6 +49,8 @@ pub mod peak;
 pub mod peak_picker;
 pub mod peak_statistics;
 pub mod search;
+pub mod reprofile;
+mod arrayops;
 
 #[cfg(test)]
 mod test_data;

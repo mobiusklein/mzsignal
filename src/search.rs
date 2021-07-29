@@ -1,3 +1,5 @@
+//! A set of low level coordinate search code. Not necessary for external use.
+
 use num_traits::Float;
 
 type MZ = f64;
@@ -9,14 +11,14 @@ pub fn nearest_left<T: Float>(vec: &[T], target_val: T, start_index: usize) -> u
     if next_index == 0 {
         return 0;
     }
-    let next_val = vec[next_index];
+    let mut next_val = vec[next_index];
     let mut best_distance = (next_val - target_val).abs();
     while next_val > target_val {
         next_index -= 1;
-        let next_val = vec[next_index];
+        next_val = vec[next_index];
         let dist = (next_val - target_val).abs();
         if dist < best_distance {
-            best_distance = best_distance;
+            best_distance = dist;
             nearest_index = next_index;
         }
         if next_index == 0 {
@@ -34,13 +36,14 @@ pub fn nearest_right<T: Float>(vec: &[T], target_val: T, start_index: usize) -> 
     if next_index >= n {
         return n;
     }
-    let next_val = vec[next_index];
+    let mut next_val = vec[next_index];
     let mut best_distance = (next_val - target_val).abs();
     while next_val < target_val {
         next_index += 1;
+        next_val = vec[next_index];
         let dist = (next_val - target_val).abs();
         if dist < best_distance {
-            best_distance = best_distance;
+            best_distance = dist;
             nearest_index = next_index;
         }
         if next_index == n {
@@ -144,22 +147,18 @@ pub fn find_between<T: Float>(array: &[T], lo: T, hi: T) -> (usize, usize) {
     if lo_i == n {
         lo_i -= 1;
     }
-    if lo - array[lo_i] > T::from(0.1).unwrap() {
-        if lo_i < array.len() - 1 {
-            lo_i += 1;
-        }
+    if lo - array[lo_i] > T::from(0.1).unwrap() && lo_i < array.len() - 1 {
+        lo_i += 1;
     }
     let mut hi_i = binsearch(array, hi);
     if hi_i == n {
         hi_i -= 1;
     }
-    if array[hi_i] - hi > T::from(0.1).unwrap() {
-        if hi_i > 0 {
-            hi_i -= 1;
-        }
+    if array[hi_i] - hi > T::from(0.1).unwrap() && hi_i > 0 {
+        hi_i -= 1;
     }
     if lo_i > hi_i {
         hi_i = lo_i;
     }
-    return (lo_i, hi_i);
+    (lo_i, hi_i)
 }

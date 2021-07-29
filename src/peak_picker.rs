@@ -1,7 +1,8 @@
-#[cfg(feature = "parallelism")]
-use rayon::prelude::*;
 use std::cmp;
 use std::ops;
+
+#[cfg(feature = "parallelism")]
+use rayon::prelude::*;
 
 use crate::peak::FittedPeak;
 use crate::peak_statistics::{
@@ -214,6 +215,7 @@ impl PeakPicker {
     }
 
     #[cfg(feature = "parallelism")]
+    #[allow(dead_code)]
     fn discover_peaks_parallel_with_overhang(
         &self,
         mz_array: &[f64],
@@ -226,10 +228,13 @@ impl PeakPicker {
         let chunk_size = n / n_chunks;
         println!("Chunk size: {}, Overhang: {}", chunk_size, overhang);
         if chunk_size <= overhang {
-            return self.discover_peaks(mz_array, intensity_array, peak_accumulator)
+            return self.discover_peaks(mz_array, intensity_array, peak_accumulator);
         }
         let windows: Vec<ops::Range<usize>> = (0..n_chunks)
-            .map(|i| (if i == 0 {0} else {i * chunk_size - overhang})..cmp::min((i + 1) * chunk_size + overhang, n))
+            .map(|i| {
+                (if i == 0 { 0 } else { i * chunk_size - overhang })
+                    ..cmp::min((i + 1) * chunk_size + overhang, n)
+            })
             .collect();
         println!("Windows: {:?}", windows);
         let peaks_or_errors: Vec<Result<(Vec<FittedPeak>, ops::Range<usize>), PeakPickerError>> =
@@ -255,8 +260,8 @@ impl PeakPicker {
                                 })
                                 // If the peak's index falls within either overhang, drop it
                                 .filter(|p| {
-                                    (p.index - start_idx as u32 > overhang as u32 || start_idx == 0) &&
-                                        (end_idx == n || p.index < (end_idx - overhang) as u32)
+                                    (p.index - start_idx as u32 > overhang as u32 || start_idx == 0)
+                                        && (end_idx == n || p.index < (end_idx - overhang) as u32)
                                 })
                                 .collect();
 
@@ -282,16 +287,16 @@ impl PeakPicker {
                             entry.insert(peaks);
                         }
                         Entry::Occupied(mut entry) => {
-                            if entry.get().len() == 0 {
+                            if entry.get().is_empty() {
                                 entry.insert(peaks);
-                            } else if peaks.len() == 0 {
+                            } else if peaks.is_empty() {
                             } else {
                                 return Err(PeakPickerError::IntervalTooSmall);
                             };
                         }
                     }
                 }
-                Err(err) => return Err(err.clone()),
+                Err(err) => return Err(err),
             };
         }
 
@@ -303,6 +308,7 @@ impl PeakPicker {
     }
 
     #[cfg(feature = "parallelism")]
+    #[allow(dead_code)]
     fn discover_peaks_parallel(
         &self,
         mz_array: &[f64],
@@ -331,19 +337,17 @@ pub fn pick_peaks(
     let picker = PeakPicker::default();
     let mut acc = Vec::new();
     match picker.discover_peaks(mz_array, intensity_array, &mut acc) {
-        Ok(_) => {
-            return Ok(acc);
-        }
-        Err(err) => return Err(err),
+        Ok(_) => Ok(acc),
+        Err(err) => Err(err),
     }
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
-    use rstest::rstest;
+    use crate::average::{ArrayPair, SignalAverager};
     use crate::test_data::{NOISE, X, Y};
-    use crate::average::{SignalAverager, ArrayPair};
+    use rstest::rstest;
 
     #[test]
     fn test_peak_picker_no_noise() {
