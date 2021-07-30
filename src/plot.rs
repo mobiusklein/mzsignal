@@ -1,7 +1,6 @@
 use std::path;
 
 use plotters::prelude::*;
-use plotters::style::RGBAColor;
 
 use crate::arrayops;
 
@@ -106,7 +105,6 @@ mod test {
         let arrays = reprofile(iterator, 0.00001);
 
         draw_png_file(&arrays.mz_array, &arrays.intensity_array, "test/0.png")?;
-        text::to_file(arrays, "test/0.txt")?;
         Ok(())
     }
 }
