@@ -345,7 +345,8 @@ pub fn pick_peaks(
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::average::{ArrayPair, SignalAverager};
+    use crate::arrayops::ArrayPair;
+    use crate::average::SignalAverager;
     use crate::test_data::{NOISE, X, Y};
     use rstest::rstest;
 
@@ -430,7 +431,7 @@ mod test {
         let mut acc = Vec::new();
 
         let mut averager = SignalAverager::new(X[0], X[X.len() - 1], 0.0001);
-        averager.push(ArrayPair::new(&X, &Y));
+        averager.push(ArrayPair::wrap(&X, &Y));
         let yhat = averager.interpolate();
 
         let result = picker.discover_peaks_parallel(&averager.mz_grid, &yhat, &mut acc, 6);

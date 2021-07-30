@@ -42,15 +42,17 @@
 //! as a backend for `ndarray-linalg`. These are enabled by passing one of the supported backends
 //! as a `feature` to `cargo` e.g.:
 #![allow(unused_imports)]
+mod arrayops;
 pub mod average;
 pub mod denoise;
 pub mod histogram;
 pub mod peak;
 pub mod peak_picker;
 pub mod peak_statistics;
-pub mod search;
 pub mod reprofile;
-mod arrayops;
+pub mod search;
+pub mod plot;
+pub mod text;
 
 #[cfg(test)]
 mod test_data;

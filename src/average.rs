@@ -1,68 +1,16 @@
+use std::borrow::Cow;
+use std::cmp;
 use std::ops::{Add, Index};
 
 #[cfg(feature = "parallelism")]
 use rayon::prelude::*;
 use std::sync::Mutex;
 
-use num_traits::{Float, ToPrimitive};
+use cfg_if;
+
+use crate::arrayops::{gridspace, ArrayPair, MZGrid};
 use crate::search;
-use crate::arrayops::gridspace;
-
-#[derive(Debug, Default)]
-pub struct ArrayPair<'lifespan> {
-    pub mz_array: &'lifespan [f64],
-    pub intensity_array: &'lifespan [f32],
-    pub min_mz: f64,
-    pub max_mz: f64,
-}
-
-impl<'lifespan> ArrayPair<'lifespan> {
-    pub fn new(
-        mz_array: &'lifespan [f64],
-        intensity_array: &'lifespan [f32],
-    ) -> ArrayPair<'lifespan> {
-        let min_mz = match mz_array.first() {
-            Some(min_mz) => *min_mz,
-            None => 0.0,
-        };
-        let max_mz = match mz_array.last() {
-            Some(max_mz) => *max_mz,
-            None => min_mz,
-        };
-        ArrayPair {
-            mz_array,
-            intensity_array,
-            min_mz,
-            max_mz,
-        }
-    }
-
-    pub fn find(&self, mz: f64) -> usize {
-        match self
-            .mz_array
-            .binary_search_by(|x| x.partial_cmp(&mz).unwrap())
-        {
-            Ok(i) => i,
-            Err(i) => i,
-        }
-    }
-
-    pub fn len(&self) -> usize {
-        self.mz_array.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
-
-    pub fn get(&self, i: usize) -> Option<(f64, f32)> {
-        if i >= self.len() {
-            None
-        } else {
-            Some((self.mz_array[i], self.intensity_array[i]))
-        }
-    }
-}
+use num_traits::{Float, ToPrimitive};
 
 #[derive(Debug, Default)]
 pub struct SignalAverager<'lifespan> {
@@ -90,24 +38,6 @@ impl<'lifespan, 'transient: 'lifespan> SignalAverager<'lifespan> {
         self.array_pairs.pop()
     }
 
-    fn create_intensity_array(&self) -> Vec<f32> {
-        self.create_intensity_array_of_size(self.mz_grid.len())
-    }
-
-    fn create_intensity_array_of_size(&self, size: usize) -> Vec<f32> {
-        vec![0.0; size]
-    }
-
-    fn find_offset(&self, mz: f64) -> usize {
-        match self
-            .mz_grid
-            .binary_search_by(|x| x.partial_cmp(&mz).unwrap())
-        {
-            Ok(i) => i,
-            Err(i) => i,
-        }
-    }
-
     #[inline]
     pub fn interpolate_point(
         &self,
@@ -118,12 +48,6 @@ impl<'lifespan, 'transient: 'lifespan> SignalAverager<'lifespan> {
         inten_j1: f64,
     ) -> f64 {
         ((inten_j * (mz_j1 - mz_x)) + (inten_j1 * (mz_x - mz_j))) / (mz_j1 - mz_j)
-    }
-
-    pub fn points_between(&self, start_mz: f64, end_mz: f64) -> usize {
-        let offset = self.find_offset(start_mz);
-        let stop_index = self.find_offset(end_mz);
-        stop_index - offset
     }
 
     pub fn interpolate_into(&self, out: &mut [f32], start_mz: f64, end_mz: f64) -> usize {
@@ -246,10 +170,38 @@ impl<'lifespan, 'transient: 'lifespan> SignalAverager<'lifespan> {
         self.interpolate_into(&mut result, self.mz_start, self.mz_end);
         result
     }
+}
 
-    pub fn copy_mz_array(&self) -> Vec<f64> {
-        self.mz_grid.clone()
+impl<'lifespan> MZGrid for SignalAverager<'lifespan> {
+    fn mz_grid(&self) -> &[f64] {
+        &self.mz_grid
     }
+}
+
+// Can't inline cfg-if
+cfg_if::cfg_if! {
+    if #[cfg(feature = "parallelism")] {
+        fn average_signal_inner(averager: &SignalAverager, n: usize) -> Vec<f32> {
+            averager.interpolate_chunks_parallel(3 + n)
+        }
+    } else {
+        fn average_signal_inner(averager: &SignalAverager, n: usize) -> Vec<f32> {
+            averager.interpolate()
+        }
+    }
+}
+
+pub fn average_signal<'lifespan>(signal: &[ArrayPair<'lifespan>], dx: f64) -> ArrayPair<'lifespan> {
+    let (mz_min, mz_max) = signal.iter().fold((f64::infinity(), 0.0), |acc, x| {
+        (
+            if acc.0 < x.min_mz { acc.0 } else { x.min_mz },
+            if acc.1 > x.max_mz { acc.1 } else { x.max_mz },
+        )
+    });
+    let mut averager = SignalAverager::new(mz_min, mz_max, dx);
+    averager.array_pairs.extend_from_slice(&signal);
+    let signal = average_signal_inner(&averager, signal.len());
+    ArrayPair::new(Cow::Owned(averager.copy_mz_array()), Cow::Owned(signal))
 }
 
 #[cfg(test)]
@@ -261,7 +213,7 @@ mod test {
     #[test]
     fn test_rebin_one() {
         let mut averager = SignalAverager::new(X[0], X[X.len() - 1], 0.00001);
-        averager.push(ArrayPair::new(&X, &Y));
+        averager.push(ArrayPair::wrap(&X, &Y));
         let yhat = averager.interpolate();
         let picker = PeakPicker::default();
         let mut acc = Vec::new();
@@ -277,7 +229,7 @@ mod test {
     #[test]
     fn test_rebin_chunked() {
         let mut averager = SignalAverager::new(X[0], X[X.len() - 1], 0.00001);
-        averager.push(ArrayPair::new(&X, &Y));
+        averager.push(ArrayPair::wrap(&X, &Y));
         let yhat = averager.interpolate_chunks(3);
         let picker = PeakPicker::default();
         let mut acc = Vec::new();
@@ -294,7 +246,7 @@ mod test {
     #[cfg(feature = "parallelism")]
     fn test_rebin_parallel_locked() {
         let mut averager = SignalAverager::new(X[0], X[X.len() - 1], 0.00001);
-        averager.push(ArrayPair::new(&X, &Y));
+        averager.push(ArrayPair::wrap(&X, &Y));
         let yhat = averager.interpolate_chunks_parallel_locked(6);
         let picker = PeakPicker::default();
         let mut acc = Vec::new();
@@ -311,7 +263,7 @@ mod test {
     #[cfg(feature = "parallelism")]
     fn test_rebin_parallel() {
         let mut averager = SignalAverager::new(X[0], X[X.len() - 1], 0.00001);
-        averager.push(ArrayPair::new(&X, &Y));
+        averager.push(ArrayPair::wrap(&X, &Y));
         let yhat = averager.interpolate_chunks_parallel(6);
         let picker = PeakPicker::default();
         let mut acc = Vec::new();

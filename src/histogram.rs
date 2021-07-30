@@ -1,5 +1,7 @@
 use num_traits::{Float, FromPrimitive, ToPrimitive};
 
+use crate::arrayops::minmax;
+
 pub fn percentile<T: Float + ToPrimitive>(values: &[T], percent: f64) -> T {
     let k = (values.len() - 1) as f64 * percent;
     let f = k.floor();
@@ -23,21 +25,6 @@ pub fn sturges_bin_width<T: Float + ToPrimitive>(values: &[T]) -> f64 {
     let d = (values.len() as f64 + 1.0).log2();
     let (min, max) = minmax(values);
     (max - min).to_f64().unwrap() / d
-}
-
-pub fn minmax<T: Float>(values: &[T]) -> (T, T) {
-    let mut max = -T::infinity();
-    let mut min = T::infinity();
-
-    for v in values.iter() {
-        if *v > max {
-            max = *v;
-        }
-        if *v < min {
-            min = *v
-        }
-    }
-    (min, max)
 }
 
 #[derive(Default, Debug, Clone)]
