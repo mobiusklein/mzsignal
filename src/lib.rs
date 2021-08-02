@@ -28,6 +28,8 @@
 //!
 //! let mut mz_array: Vec<f64> = Vec::new();
 //! let mut intensity_array: Vec<f32> = Vec::new();
+//!
+//! // Read in signal arrays from a text file
 //! let reader = io::BufReader::new(fs::File::open("./test/data/test.txt").unwrap());
 //! for line in reader.lines() {
 //!     let line = line.unwrap();
@@ -36,8 +38,14 @@
 //!     mz_array.push(chunks[0].parse::<f64>().expect("Expected number for m/z"));
 //!     intensity_array.push(chunks[1].parse::<f32>().expect("Expected number for intensity"));
 //! }
+//!
+//! // Create a peak picker
 //! let picker = mzsignal::PeakPicker::default();
+//!
+//! // Create an accumulator
 //! let mut acc = Vec::new();
+//!
+//! // Pick peaks
 //! let peak_count = picker.discover_peaks(&mz_array, &intensity_array, &mut acc).unwrap();
 //! assert_eq!(peak_count , 4);
 //! for peak in acc.iter() {
