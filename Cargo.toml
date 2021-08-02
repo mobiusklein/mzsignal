@@ -1,6 +1,6 @@
 [package]
 name = "mzsignal"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2018"
 
 keywords = [
@@ -16,6 +16,7 @@ categories = [
 description = "A library for mass spectrometry signal processing"
 license = "Apache-2.0"
 repository = "https://github.com/mobiusklein/mzsignal"
+documentation = "https://docs.rs/mzsignal"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
