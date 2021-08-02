@@ -3,6 +3,20 @@ name = "mzsignal"
 version = "0.1.0"
 edition = "2018"
 
+keywords = [
+    'mass-spectrometry',
+    'signal-processing',
+    'peak-picking'
+]
+
+categories = [
+    "science"
+]
+
+description = "A library for mass spectrometry signal processing"
+license = "Apache-2.0"
+repository = "https://github.com/mobiusklein/mzsignal"
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
