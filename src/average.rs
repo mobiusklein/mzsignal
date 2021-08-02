@@ -1,6 +1,9 @@
+/// Re-bin a single spectrum, or average together multiple spectra using
+/// interpolation.
 use std::borrow::Cow;
 use std::cmp;
 use std::ops::{Add, Index};
+use std::collections::VecDeque;
 
 #[cfg(feature = "parallelism")]
 use rayon::prelude::*;
@@ -17,7 +20,7 @@ pub struct SignalAverager<'lifespan> {
     pub mz_grid: Vec<f64>,
     pub mz_start: f64,
     pub mz_end: f64,
-    pub array_pairs: Vec<ArrayPair<'lifespan>>,
+    pub array_pairs: VecDeque<ArrayPair<'lifespan>>,
 }
 
 impl<'lifespan, 'transient: 'lifespan> SignalAverager<'lifespan> {
@@ -26,16 +29,18 @@ impl<'lifespan, 'transient: 'lifespan> SignalAverager<'lifespan> {
             mz_grid: gridspace(mz_start, mz_end, dx),
             mz_start,
             mz_end,
-            array_pairs: Vec::new(),
+            array_pairs: VecDeque::new(),
         }
     }
 
+    /// Put `pair` into the queue of arrays being averaged together.
     pub fn push(&mut self, pair: ArrayPair<'transient>) {
-        self.array_pairs.push(pair)
+        self.array_pairs.push_back(pair)
     }
 
+    /// Remove the least recently added array pair from the queue.
     pub fn pop(&mut self) -> Option<ArrayPair<'lifespan>> {
-        self.array_pairs.pop()
+        self.array_pairs.pop_front()
     }
 
     #[inline]
@@ -191,6 +196,8 @@ cfg_if::cfg_if! {
     }
 }
 
+/// Average together signal from the slice of `ArrayPair`s with spacing `dx` and create
+/// a new `ArrayPair` from it
 pub fn average_signal<'lifespan>(signal: &[ArrayPair<'lifespan>], dx: f64) -> ArrayPair<'lifespan> {
     let (mz_min, mz_max) = signal.iter().fold((f64::infinity(), 0.0), |acc, x| {
         (
@@ -199,7 +206,7 @@ pub fn average_signal<'lifespan>(signal: &[ArrayPair<'lifespan>], dx: f64) -> Ar
         )
     });
     let mut averager = SignalAverager::new(mz_min, mz_max, dx);
-    averager.array_pairs.extend_from_slice(&signal);
+    averager.array_pairs.extend(signal.iter().map(|a|a.borrow()));
     let signal = average_signal_inner(&averager, signal.len());
     ArrayPair::new(Cow::Owned(averager.copy_mz_array()), Cow::Owned(signal))
 }

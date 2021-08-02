@@ -1,7 +1,7 @@
-use std::io::prelude::*;
-use std::io;
-use std::path;
 use std::fs;
+use std::io;
+use std::io::prelude::*;
+use std::path;
 
 use crate::arrayops::ArrayPair;
 
@@ -15,7 +15,6 @@ pub fn arrays_to_file<P: AsRef<path::Path>>(arrays: ArrayPair<'_>, path: P) -> i
     }
     Ok(())
 }
-
 
 pub fn arrays_from_reader<'a, R: io::Read>(source: R) -> io::Result<ArrayPair<'a>> {
     let reader = io::BufReader::new(source);
@@ -35,7 +34,6 @@ pub fn arrays_from_reader<'a, R: io::Read>(source: R) -> io::Result<ArrayPair<'a
     }
     Ok(ArrayPair::from((mz_array, intensity_array)))
 }
-
 
 pub fn arrays_from_file<'a, P: AsRef<path::Path>>(path: P) -> io::Result<ArrayPair<'a>> {
     let reader = fs::File::open(path)?;

@@ -1,4 +1,4 @@
-//! Remove local noise from a spectrum using the denoising algorithm from MasSpike
+//! Remove local noise from a spectrum using the denoising algorithm from MasSpike.
 //!
 use std::ops;
 use std::slice;
@@ -352,7 +352,7 @@ impl<'transient, 'lifespan: 'transient> SignalBackgroundDenoiser {
     }
 }
 
-/// Remove background noise from a spectrum in place, returning the same slice of memory
+/// Remove background noise from a spectrum **in-place**, returning the same slice of memory.
 /// # Arguments
 /// * `mz_array` - The m/z array for the spectrum. This _should_ be relatively evenly spaced for the
 ///                assumptions of this algorithm to work, so a profile spectrum is recommended.

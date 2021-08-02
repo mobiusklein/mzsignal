@@ -2,15 +2,31 @@ use std::cmp;
 use std::fmt;
 use std::hash;
 
+use mzpeaks::prelude::*;
+use mzpeaks;
+use mzpeaks::{
+    CentroidLike, CoordinateLike, IndexType, IndexedCoordinate,
+    IntensityMeasurement, MZ,
+};
+
 #[derive(Debug, Clone, Default)]
+/// A [`FittedPeak`] implements the [`CentroidLike`](https://docs.rs/mzpeaks/latest/mzpeaks/peak/trait.CentroidLike.html) trait
+/// with an m/z coordinate, but also a shape attribute `full_width_at_half_max` and a
+/// intensity uncertainty, `signal_to_noise_ratio`.
 pub struct FittedPeak {
     pub mz: f64,
     pub intensity: f32,
     pub index: u32,
 
+    /// A measure of the difference between the intensity of this peak and the
+    /// surrounding data
     pub signal_to_noise: f32,
+    /// A symmetric average peak shape parameter
     pub full_width_at_half_max: f32,
 }
+
+// Implement the CentroidLike interface
+mzpeaks::implement_centroidlike!(FittedPeak, true);
 
 impl fmt::Display for FittedPeak {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -19,27 +35,5 @@ impl fmt::Display for FittedPeak {
             "FittedPeak({}, {}, {}, {}, {})",
             self.mz, self.intensity, self.index, self.full_width_at_half_max, self.signal_to_noise
         )
-    }
-}
-
-impl hash::Hash for FittedPeak {
-    fn hash<H: hash::Hasher>(&self, state: &mut H) {
-        let mz_val: i64 = self.mz.round() as i64;
-        mz_val.hash(state);
-    }
-}
-
-impl cmp::PartialOrd<FittedPeak> for FittedPeak {
-    fn partial_cmp(&self, other: &FittedPeak) -> Option<cmp::Ordering> {
-        self.mz.partial_cmp(&other.mz)
-    }
-}
-
-impl cmp::PartialEq<FittedPeak> for FittedPeak {
-    fn eq(&self, other: &FittedPeak) -> bool {
-        if (self.mz - other.mz).abs() > 1e-3 || (self.intensity - other.intensity).abs() > 1e-3 {
-            return false;
-        }
-        true
     }
 }

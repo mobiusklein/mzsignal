@@ -1,19 +1,49 @@
+//! Convert picked peaks into a profile spectrum.
+//!
 use std::borrow;
 use std::cmp;
 use std::iter;
 
-use crate::peak::FittedPeak;
+use mzpeaks::{
+    CentroidLike, CoordinateLike, IndexType, IndexedCoordinate, IntensityMeasurement, MZ,
+};
+
 use crate::arrayops::{gridspace, trapz, ArrayPair, MZGrid};
+use crate::peak::FittedPeak;
 
 #[derive(Debug, Clone, Copy)]
+/// A statistical model for peak shapes
 pub enum PeakShape {
     Gaussian,
 }
 
 #[derive(Debug, Clone)]
+/// A model for predicting the signal shape given a fitted peak as a set
+/// of model parameters
 pub struct PeakShapeModel<'lifespan> {
     pub peak: borrow::Cow<'lifespan, FittedPeak>,
     pub shape: PeakShape,
+}
+
+
+impl<'lifespan> CoordinateLike<MZ> for PeakShapeModel<'lifespan> {
+    fn coordinate(&self) -> f64 {
+        self.peak.coordinate()
+    }
+}
+
+impl<'lifespan> IntensityMeasurement for PeakShapeModel<'lifespan> {
+    fn intensity(&self) -> f32 {
+        self.peak.intensity()
+    }
+}
+
+impl<'lifespan> IndexedCoordinate<MZ> for PeakShapeModel<'lifespan> {
+    fn get_index(&self) -> IndexType {
+        self.peak.get_index()
+    }
+
+    fn set_index(&mut self, _index: IndexType) {}
 }
 
 impl<'lifespan> PartialEq<PeakShapeModel<'lifespan>> for PeakShapeModel<'lifespan> {
@@ -111,20 +141,12 @@ impl<'lifespan> From<&'lifespan FittedPeak> for PeakShapeModel<'lifespan> {
 }
 
 pub trait AsPeakShapeModel<'a, 'b: 'a> {
-    fn as_peak_shape_model(
-        self: &'a Self,
-        fwhm: f32,
-        shape: PeakShape,
-    ) -> PeakShapeModel<'b>;
+    fn as_peak_shape_model(self: &'a Self, fwhm: f32, shape: PeakShape) -> PeakShapeModel<'b>;
 }
 
-impl<'a, 'b: 'a> AsPeakShapeModel<'a, 'b> for &FittedPeak {
-    fn as_peak_shape_model(
-        self: &'a Self,
-        fwhm: f32,
-        shape: PeakShape,
-    ) -> PeakShapeModel<'b> {
-        PeakShapeModel::from_centroid(self.mz, self.intensity, fwhm, shape)
+impl<'a, 'b: 'a, T: CentroidLike> AsPeakShapeModel<'a, 'b> for &T {
+    fn as_peak_shape_model(self: &'a Self, fwhm: f32, shape: PeakShape) -> PeakShapeModel<'b> {
+        PeakShapeModel::from_centroid(self.coordinate(), self.intensity(), fwhm, shape)
     }
 }
 
@@ -222,18 +244,28 @@ impl<'passing, 'transient: 'passing, 'lifespan: 'transient> PeakSetReprofiler {
 }
 
 
-pub fn reprofile<'transient, 'lifespan: 'transient, T: Iterator<Item=&'lifespan P>, P>(peaks: T, dx: f64) -> ArrayPair<'lifespan>
-    where &'lifespan P: Into<PeakShapeModel<'transient>>, P: 'static {
-        let models: Vec<PeakShapeModel<'transient>> = peaks.map(|p| p.into()).collect();
-        if models.is_empty() {
-            return ArrayPair::from((Vec::new(), Vec::new()));
-        }
-        let mz_start = models.first().unwrap().extremes().0 - 1.0;
-        let mz_end = models.last().unwrap().extremes().1 + 1.0;
-        let reprofiler = PeakSetReprofiler::new(mz_start, mz_end, dx);
-        let arrays = reprofiler.reprofile_from_models(models);
-        let result = ArrayPair::from((reprofiler.copy_mz_array(), arrays.intensity_array.into_owned()));
-        result
+/// Convert an iterator of peak-like objects into an `ArrayPair` with spacing `dx`
+pub fn reprofile<'transient, 'lifespan: 'transient, T: Iterator<Item = &'lifespan P>, P>(
+    peaks: T,
+    dx: f64,
+) -> ArrayPair<'lifespan>
+where
+    &'lifespan P: Into<PeakShapeModel<'transient>>,
+    P: 'static,
+{
+    let models: Vec<PeakShapeModel<'transient>> = peaks.map(|p| p.into()).collect();
+    if models.is_empty() {
+        return ArrayPair::from((Vec::new(), Vec::new()));
+    }
+    let mz_start = models.first().unwrap().extremes().0 - 1.0;
+    let mz_end = models.last().unwrap().extremes().1 + 1.0;
+    let reprofiler = PeakSetReprofiler::new(mz_start, mz_end, dx);
+    let arrays = reprofiler.reprofile_from_models(models);
+    let result = ArrayPair::from((
+        reprofiler.copy_mz_array(),
+        arrays.intensity_array.into_owned(),
+    ));
+    result
 }
 
 impl MZGrid for PeakSetReprofiler {
@@ -242,3 +274,7 @@ impl MZGrid for PeakSetReprofiler {
     }
 }
 
+#[cfg(test)]
+mod test {
+    use super::*;
+}

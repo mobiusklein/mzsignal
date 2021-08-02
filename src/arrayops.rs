@@ -38,12 +38,12 @@ pub fn trapz<
     x: &[A],
     y: &[B],
 ) -> B {
-    // let result = B::from(0.0).unwrap();
+    let half = B::from(0.5).unwrap();
     let n = x.len();
     (0..n - 2)
         .map(|i| {
             let delta = x[i + 1] - x[i];
-            delta.as_() * B::from(0.5).unwrap() * (y[i + 1] + y[i])
+            delta.as_() * half * (y[i + 1] + y[i])
         })
         .sum()
 }
@@ -82,6 +82,9 @@ pub trait MZGrid {
 }
 
 #[derive(Debug, Default, Clone)]
+/// Represent an m/z array and an intensity array with independent
+/// "borrowing" statuses using [`std::borrow::Cow`]. Adds a few helper
+/// methods.
 pub struct ArrayPair<'lifespan> {
     pub mz_array: Cow<'lifespan, [f64]>,
     pub intensity_array: Cow<'lifespan, [f32]>,
@@ -141,6 +144,22 @@ impl<'lifespan> ArrayPair<'lifespan> {
         } else {
             Some((self.mz_array[i], self.intensity_array[i]))
         }
+    }
+
+    pub fn borrow(&'_ self) -> ArrayPair<'_> {
+        ArrayPair::new(Cow::Borrowed(&self.mz_array), Cow::Borrowed(&self.intensity_array))
+    }
+
+    pub fn to_owned(&self) -> ArrayPair<'_> {
+        let mz_array = match &self.mz_array {
+            Cow::Borrowed(b) => Cow::Owned(b.clone().to_owned()),
+            Cow::Owned(b) => Cow::Owned(b.clone())
+        };
+        let intensity_array = match &self.intensity_array {
+            Cow::Borrowed(b) => Cow::Owned(b.clone().to_owned()),
+            Cow::Owned(b) => Cow::Owned(b.clone())
+        };
+        ArrayPair::new(mz_array, intensity_array)
     }
 }
 
