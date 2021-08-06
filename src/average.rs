@@ -211,6 +211,11 @@ pub fn average_signal<'lifespan>(signal: &[ArrayPair<'lifespan>], dx: f64) -> Ar
     ArrayPair::new(Cow::Owned(averager.copy_mz_array()), Cow::Owned(signal))
 }
 
+pub fn rebin<'transient, 'lifespan: 'transient>(mz_array: &'lifespan [f64], intensity_array: &'lifespan [f32], dx: f64) -> ArrayPair<'transient> {
+    let pair = [ArrayPair::from((mz_array, intensity_array))];
+    average_signal(&pair, dx)
+}
+
 #[cfg(test)]
 mod test {
     use super::*;

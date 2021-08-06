@@ -4,14 +4,14 @@ use std::io;
 use std::io::prelude;
 use std::borrow::Cow;
 
-use plotters::prelude::*;
+pub use plotters::prelude::*;
 use plotters::coord::ranged1d::{ValueFormatter, Ranged, AsRangedCoord, DefaultFormatting, KeyPointHint, NoDefaultFormatting};
 use plotters::coord::types::{RangedCoordf64, RangedCoordf32};
 
 use mzpeaks::{CoordinateLike, IntensityMeasurement, MZ};
 
 use crate::arrayops;
-
+use crate::average::rebin;
 
 pub fn peaks_to_arrays<
     'transient,
@@ -74,7 +74,7 @@ pub type CoordinateSpace = Cartesian2d<plotters::coord::types::RangedCoordf64, S
 
 macro_rules! error_t {
     ($t:ty) => {
-        plotters::drawing::DrawingAreaErrorKind<<B as plotters::prelude::DrawingBackend>::ErrorType>
+        plotters::drawing::DrawingAreaErrorKind<<$t as plotters::prelude::DrawingBackend>::ErrorType>
     };
 }
 
@@ -86,13 +86,21 @@ pub struct SpectrumSeries<'a> {
     pub name: String,
     pub color: Option<plotters::style::RGBAColor>,
     pub width: u32,
+    pub downsample: f64,
 }
 
 impl<'a> SpectrumSeries<'a> {
     pub fn draw<B: DrawingBackend>(&self, chart: &mut ChartContext<B, CoordinateSpace>) -> Result<(), Box<error_t!(B)>> {
-        let points: Vec<(f64, f32)> = self.mz_array
+
+        let pair = if self.downsample > 0.0 {
+            rebin(&self.mz_array, &self.intensity_array, self.downsample)
+        } else {
+            arrayops::ArrayPair::new(Cow::Borrowed(&self.mz_array), Cow::Borrowed(&self.intensity_array))
+        };
+
+        let points: Vec<(f64, f32)> = pair.mz_array
             .iter()
-            .zip(self.intensity_array.iter())
+            .zip(pair.intensity_array.iter())
             .map(|(x, y)| (*x, *y))
             .collect();
 
@@ -123,6 +131,21 @@ impl<'a> SpectrumSeries<'a> {
         let (ymin, ymax) = arrayops::minmax(&self.intensity_array);
         (xmin, xmax, ymin, ymax)
     }
+
+    pub fn color(&mut self, color: plotters::style::RGBAColor) -> &mut Self {
+        self.color = Some(color);
+        self
+    }
+
+    pub fn name(&mut self, name: String) -> &mut Self {
+        self.name = name;
+        self
+    }
+
+    pub fn downsample(&mut self, spacing: f64) -> &mut Self {
+        self.downsample = spacing;
+        self
+    }
 }
 
 impl<'a> From<&arrayops::ArrayPair<'a>> for SpectrumSeries<'a> {
@@ -146,6 +169,7 @@ impl<'a> From<&arrayops::ArrayPair<'a>> for SpectrumSeries<'a> {
         };
         inst.color = None;
         inst.width = 1;
+        inst.downsample = 0.0;
         inst
     }
 }
@@ -162,8 +186,14 @@ impl<
         let mut intensity_array = Vec::new();
 
         for p in iterator {
-            mz_array.push(p.coordinate());
+            let c = p.coordinate();
+            mz_array.push(c - 0.0001);
+            mz_array.push(c);
+            mz_array.push(c + 0.0001);
+
+            intensity_array.push(0.0);
             intensity_array.push(p.intensity());
+            intensity_array.push(0.0);
         }
 
         inst.mz_array = Cow::Owned(mz_array);
@@ -176,19 +206,26 @@ impl<
 
 pub struct SpectrumPlot<'lifespan, 'a, 'b, B: DrawingBackend> {
     pub chart: ChartBuilder<'a, 'b, B>,
-    pub series: Vec<SpectrumSeries<'lifespan>>
+    pub series: Vec<SpectrumSeries<'lifespan>>,
+    pub xlim: Option<(f64, f64)>,
 }
 
 impl<'lifespan, 'a, 'b, B: DrawingBackend> SpectrumPlot<'lifespan, 'a, 'b, B> {
     pub fn new(chart: ChartBuilder<'a, 'b, B>) -> Self {
         Self {
             chart,
-            series: Vec::new()
+            series: Vec::new(),
+            xlim: None
         }
     }
 
     pub fn add_series<P: Into<SpectrumSeries<'lifespan>>>(&mut self, series: P) -> &mut Self {
         self.series.push(series.into());
+        self
+    }
+
+    pub fn xlim(&mut self, xlow: f64, xhigh: f64) -> &mut Self {
+        self.xlim = Some((xlow, xhigh));
         self
     }
 
@@ -200,10 +237,13 @@ impl<'lifespan, 'a, 'b, B: DrawingBackend> SpectrumPlot<'lifespan, 'a, 'b, B> {
         for series in self.series.iter() {
             let (s_xmin, s_xmax, _ymin, s_ymax) = series.extrema();
             xmin = if s_xmin < xmin { s_xmin } else { xmin };
-            xmax = if s_xmax < xmax { s_xmax } else { xmax };
-            ymax = if s_ymax < ymax { s_ymax } else { ymax };
+            xmax = if s_xmax >xmax { s_xmax } else { xmax };
+            ymax = if s_ymax > ymax { s_ymax } else { ymax };
         }
-
+        if let Some(xlim) = self.xlim {
+            xmin = xlim.0;
+            xmax = xlim.1;
+        }
         let xrange = RangedCoordf64::from(xmin..xmax);
         let yrange = SciNotRangedCoordf32 {coord: RangedCoordf32::from(0.0..ymax) };
         (xrange, yrange)
@@ -211,26 +251,93 @@ impl<'lifespan, 'a, 'b, B: DrawingBackend> SpectrumPlot<'lifespan, 'a, 'b, B> {
 
     pub fn draw(&mut self) -> Result<(), Box<error_t!(B)>> {
         let (xrange, yrange) = self.make_coordinate_ranges();
-
         let mut chart = self.chart
             .margin(15)
             .x_label_area_size(40)
             .y_label_area_size(60)
             .build_cartesian_2d(xrange, yrange)?;
 
-        chart
-            .configure_mesh()
-            .disable_mesh()
-            .x_desc("m/z")
-            .axis_desc_style(("sans-serif", 16).into_font())
-            .y_desc("Intensity")
-            .draw()?;
+        let mut mesh = chart.configure_mesh();
+        mesh.disable_mesh();
+        mesh.x_desc("m/z");
+        mesh.axis_desc_style(("sans-serif", 16).into_font());
+        mesh.y_desc("Intensity");
+        mesh.draw()?;
 
         for series in self.series.iter() {
             series.draw(&mut chart)?;
         }
-
         Ok(())
+    }
+}
+
+
+pub trait PlotBuilder<'a> {
+    type BackendType: DrawingBackend;
+
+    fn size(&mut self, width: u32, height: u32) -> &mut Self;
+    fn path<P: Into<path::PathBuf>>(&mut self, path: P) -> &mut Self;
+    fn add_series<S: Into<SpectrumSeries<'a>>>(&mut self, series: S) -> &mut Self;
+    fn xlim(&mut self, xlow: f64, xhigh: f64) -> &mut Self;
+    fn draw(&mut self) -> Result<(), Box<error_t!(Self::BackendType)>>;
+}
+
+
+pub struct SVGBuilder<'lifespan> {
+    pub size: (u32, u32),
+    pub path: path::PathBuf,
+    pub series: Vec<SpectrumSeries<'lifespan>>,
+    pub xlim: Option<(f64, f64)>,
+}
+
+impl<'lifespan> Default for SVGBuilder<'lifespan> {
+    fn default() -> SVGBuilder<'lifespan> {
+        SVGBuilder {
+            size: (640, 480),
+            path: path::PathBuf::default(),
+            series: Vec::new(),
+            xlim: None
+        }
+    }
+}
+
+impl<'lifespan> PlotBuilder<'lifespan> for SVGBuilder<'lifespan> {
+    type BackendType = SVGBackend<'lifespan>;
+
+    fn size(&mut self, width: u32, height: u32) -> &mut Self {
+        self.size = (width, height);
+        self
+    }
+
+    fn path<P: Into<path::PathBuf>>(&mut self, path: P) -> &mut Self {
+        self.path = path.into();
+        self
+    }
+
+    fn add_series<S: Into<SpectrumSeries<'lifespan>>>(&mut self, series: S) -> &mut Self {
+        self.series.push(series.into());
+        self
+    }
+
+    fn xlim(&mut self, xlow: f64, xhigh: f64) -> &mut Self {
+        self.xlim = Some((xlow, xhigh));
+        self
+    }
+
+    fn draw(&mut self) -> Result<(), Box<error_t!(Self::BackendType)>> {
+        let backend = SVGBackend::new(&self.path, self.size);
+        let root = backend.into_drawing_area();
+        root.fill(&WHITE)?;
+
+        let mut chart = SpectrumPlot::new(ChartBuilder::on(&root));
+        if let Some(xlim) = self.xlim {
+            chart.xlim(xlim.0, xlim.1);
+        }
+        for series in self.series.iter().cloned() {
+            chart.add_series(series);
+        }
+
+        chart.draw()
     }
 }
 
@@ -402,6 +509,27 @@ mod test {
         let arrays = reprofile(iterator, 0.00001);
 
         draw_png_file(&arrays.mz_array, &arrays.intensity_array, "test/0.png")?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_builder() -> Result<(), Box<dyn std::error::Error>> {
+        let yhat: Vec<f32> = Y
+            .iter()
+            .zip(NOISE.iter())
+            .map(|(y, e)| y * 50.0 + e * 20.0)
+            .collect();
+        let peaks = pick_peaks(&X, &yhat).unwrap();
+        let iterator = peaks.iter();
+
+        let arrays = reprofile(iterator, 0.001);
+        let mut chart = SVGBuilder::default();
+        let mut ser = SpectrumSeries::from(peaks.iter());
+        ser.color(RED.mix(1.0));
+        chart.path("test/0.svg").size(1028, 512).add_series(SpectrumSeries::from(&arrays))
+            .add_series(ser);
+        chart.xlim(179.0, 181.0);
+        chart.draw()?;
         Ok(())
     }
 }

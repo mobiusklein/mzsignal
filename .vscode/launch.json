@@ -19,7 +19,7 @@
             "name": "Run Test Debugger",
             "type": "cppvsdbg",
             "request": "launch",
-            "program": "${workspaceRoot}/target/debug/deps/mzdata-490a4361f871d95e.exe",
+            "program": "${workspaceRoot}/target/debug/deps/mzsignal-dc67c2ce44cc4753.exe",
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceRoot}",
