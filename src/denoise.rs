@@ -363,11 +363,11 @@ impl<'transient, 'lifespan: 'transient> SignalBackgroundDenoiser {
 ///             be exhausted in one window before the noise is appreciably depleted in the region, leading
 ///             to still-noisy spectra.
 ///
-pub fn denoise<'a>(
-    mz_array: &'a [f64],
-    intensity_array: &'a mut [f32],
+pub fn denoise<'b>(
+    mz_array: &[f64],
+    intensity_array: &'b mut [f32],
     scale: f32,
-) -> Result<&'a [f32], DenoisingError> {
+) -> Result<&'b [f32], DenoisingError> {
     let denoiser = SignalBackgroundDenoiser::default();
     match denoiser.denoise(mz_array, intensity_array, scale) {
         Ok(_noise) => Ok(intensity_array),
