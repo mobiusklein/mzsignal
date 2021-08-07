@@ -1,12 +1,14 @@
-use std::path;
-use std::ops::Range;
+use std::borrow::Cow;
 use std::io;
 use std::io::prelude;
-use std::borrow::Cow;
+use std::ops::Range;
+use std::path;
 
+use plotters::coord::ranged1d::{
+    AsRangedCoord, DefaultFormatting, KeyPointHint, NoDefaultFormatting, Ranged, ValueFormatter,
+};
+use plotters::coord::types::{RangedCoordf32, RangedCoordf64};
 pub use plotters::prelude::*;
-use plotters::coord::ranged1d::{ValueFormatter, Ranged, AsRangedCoord, DefaultFormatting, KeyPointHint, NoDefaultFormatting};
-use plotters::coord::types::{RangedCoordf64, RangedCoordf32};
 
 use mzpeaks::{CoordinateLike, IntensityMeasurement, MZ};
 
@@ -46,7 +48,7 @@ impl Ranged for SciNotRangedCoordf32 {
     type ValueType = f32;
     type FormatOption = NoDefaultFormatting;
 
-    fn map(&self, value: &Self::ValueType, limit: (i32, i32)) -> i32{
+    fn map(&self, value: &Self::ValueType, limit: (i32, i32)) -> i32 {
         self.coord.map(value, limit)
     }
 
@@ -64,20 +66,20 @@ impl ValueFormatter<f32> for SciNotRangedCoordf32 {
         plotters::data::float::FloatPrettyPrinter {
             allow_scientific: true,
             min_decimal: 0,
-            max_decimal: 3
-        }.print(*value as f64)
+            max_decimal: 3,
+        }
+        .print(*value as f64)
     }
 }
 
-pub type CoordinateSpace = Cartesian2d<plotters::coord::types::RangedCoordf64, SciNotRangedCoordf32>;
-
+pub type CoordinateSpace =
+    Cartesian2d<plotters::coord::types::RangedCoordf64, SciNotRangedCoordf32>;
 
 macro_rules! error_t {
     ($t:ty) => {
         plotters::drawing::DrawingAreaErrorKind<<$t as plotters::prelude::DrawingBackend>::ErrorType>
     };
 }
-
 
 #[derive(Default, Clone)]
 pub struct SpectrumSeries<'a> {
@@ -90,15 +92,21 @@ pub struct SpectrumSeries<'a> {
 }
 
 impl<'a> SpectrumSeries<'a> {
-    pub fn draw<B: DrawingBackend>(&self, chart: &mut ChartContext<B, CoordinateSpace>) -> Result<(), Box<error_t!(B)>> {
-
+    pub fn draw<B: DrawingBackend>(
+        &self,
+        chart: &mut ChartContext<B, CoordinateSpace>,
+    ) -> Result<(), Box<error_t!(B)>> {
         let pair = if self.downsample > 0.0 {
             rebin(&self.mz_array, &self.intensity_array, self.downsample)
         } else {
-            arrayops::ArrayPair::new(Cow::Borrowed(&self.mz_array), Cow::Borrowed(&self.intensity_array))
+            arrayops::ArrayPair::new(
+                Cow::Borrowed(&self.mz_array),
+                Cow::Borrowed(&self.intensity_array),
+            )
         };
 
-        let points: Vec<(f64, f32)> = pair.mz_array
+        let points: Vec<(f64, f32)> = pair
+            .mz_array
             .iter()
             .zip(pair.intensity_array.iter())
             .map(|(x, y)| (*x, *y))
@@ -106,7 +114,7 @@ impl<'a> SpectrumSeries<'a> {
 
         let color = match self.color {
             Some(c) => c,
-            None => BLACK.mix(1.0)
+            None => BLACK.mix(1.0),
         };
 
         let series = LineSeries::new(
@@ -120,9 +128,7 @@ impl<'a> SpectrumSeries<'a> {
 
         match chart.draw_series(series) {
             Ok(_) => Ok(()),
-            Err(err) => {
-                Err(Box::new(err))
-            }
+            Err(err) => Err(Box::new(err)),
         }
     }
 
@@ -152,20 +158,12 @@ impl<'a> From<&arrayops::ArrayPair<'a>> for SpectrumSeries<'a> {
     fn from(pair: &arrayops::ArrayPair<'a>) -> SpectrumSeries<'a> {
         let mut inst = SpectrumSeries::default();
         inst.mz_array = match &pair.mz_array {
-            Cow::Borrowed(array) => {
-                Cow::Borrowed(array)
-            },
-            Cow::Owned(array) => {
-                Cow::Owned(array.clone())
-            }
+            Cow::Borrowed(array) => Cow::Borrowed(array),
+            Cow::Owned(array) => Cow::Owned(array.clone()),
         };
         inst.intensity_array = match &pair.intensity_array {
-            Cow::Borrowed(array) => {
-                Cow::Borrowed(array)
-            },
-            Cow::Owned(array) => {
-                Cow::Owned(array.clone())
-            }
+            Cow::Borrowed(array) => Cow::Borrowed(array),
+            Cow::Owned(array) => Cow::Owned(array.clone()),
         };
         inst.color = None;
         inst.width = 1;
@@ -175,11 +173,12 @@ impl<'a> From<&arrayops::ArrayPair<'a>> for SpectrumSeries<'a> {
 }
 
 impl<
-    'b,
-    'a: 'b,
-    P: CoordinateLike<MZ> + IntensityMeasurement  + 'static,
-    I: IntoIterator<Item = &'b P>,
-> From<I> for SpectrumSeries<'a> {
+        'b,
+        'a: 'b,
+        P: CoordinateLike<MZ> + IntensityMeasurement + 'static,
+        I: IntoIterator<Item = &'b P>,
+    > From<I> for SpectrumSeries<'a>
+{
     fn from(iterator: I) -> SpectrumSeries<'a> {
         let mut inst = SpectrumSeries::default();
         let mut mz_array = Vec::new();
@@ -215,7 +214,7 @@ impl<'lifespan, 'a, 'b, B: DrawingBackend> SpectrumPlot<'lifespan, 'a, 'b, B> {
         Self {
             chart,
             series: Vec::new(),
-            xlim: None
+            xlim: None,
         }
     }
 
@@ -237,7 +236,7 @@ impl<'lifespan, 'a, 'b, B: DrawingBackend> SpectrumPlot<'lifespan, 'a, 'b, B> {
         for series in self.series.iter() {
             let (s_xmin, s_xmax, _ymin, s_ymax) = series.extrema();
             xmin = if s_xmin < xmin { s_xmin } else { xmin };
-            xmax = if s_xmax >xmax { s_xmax } else { xmax };
+            xmax = if s_xmax > xmax { s_xmax } else { xmax };
             ymax = if s_ymax > ymax { s_ymax } else { ymax };
         }
         if let Some(xlim) = self.xlim {
@@ -245,13 +244,16 @@ impl<'lifespan, 'a, 'b, B: DrawingBackend> SpectrumPlot<'lifespan, 'a, 'b, B> {
             xmax = xlim.1;
         }
         let xrange = RangedCoordf64::from(xmin..xmax);
-        let yrange = SciNotRangedCoordf32 {coord: RangedCoordf32::from(0.0..ymax) };
+        let yrange = SciNotRangedCoordf32 {
+            coord: RangedCoordf32::from(0.0..ymax),
+        };
         (xrange, yrange)
     }
 
     pub fn draw(&mut self) -> Result<(), Box<error_t!(B)>> {
         let (xrange, yrange) = self.make_coordinate_ranges();
-        let mut chart = self.chart
+        let mut chart = self
+            .chart
             .margin(15)
             .x_label_area_size(40)
             .y_label_area_size(60)
@@ -271,7 +273,6 @@ impl<'lifespan, 'a, 'b, B: DrawingBackend> SpectrumPlot<'lifespan, 'a, 'b, B> {
     }
 }
 
-
 pub trait PlotBuilder<'a> {
     type BackendType: DrawingBackend;
 
@@ -281,7 +282,6 @@ pub trait PlotBuilder<'a> {
     fn xlim(&mut self, xlow: f64, xhigh: f64) -> &mut Self;
     fn draw(&mut self) -> Result<(), Box<error_t!(Self::BackendType)>>;
 }
-
 
 pub struct SVGBuilder<'lifespan> {
     pub size: (u32, u32),
@@ -296,7 +296,7 @@ impl<'lifespan> Default for SVGBuilder<'lifespan> {
             size: (640, 480),
             path: path::PathBuf::default(),
             series: Vec::new(),
-            xlim: None
+            xlim: None,
         }
     }
 }
@@ -341,7 +341,6 @@ impl<'lifespan> PlotBuilder<'lifespan> for SVGBuilder<'lifespan> {
     }
 }
 
-
 pub fn draw_svg_file<P>(
     mz_array: &[f64],
     intensity_array: &[f32],
@@ -377,7 +376,9 @@ pub fn draw_on_png(
     let (_ymin, ymax) = arrayops::minmax(intensity_array);
 
     let xrange = RangedCoordf64::from(xmin..xmax);
-    let yrange = SciNotRangedCoordf32 {coord: RangedCoordf32::from(0.0..ymax) };
+    let yrange = SciNotRangedCoordf32 {
+        coord: RangedCoordf32::from(0.0..ymax),
+    };
 
     root.fill(&WHITE)?;
     let mut chart = ChartBuilder::on(&root)
@@ -426,7 +427,9 @@ pub fn draw_on_svg(
     let (_ymin, ymax) = arrayops::minmax(intensity_array);
 
     let xrange = RangedCoordf64::from(xmin..xmax);
-    let yrange = SciNotRangedCoordf32 {coord: RangedCoordf32::from(0.0..ymax) };
+    let yrange = SciNotRangedCoordf32 {
+        coord: RangedCoordf32::from(0.0..ymax),
+    };
 
     root.fill(&WHITE)?;
     let mut chart = ChartBuilder::on(&root)
@@ -466,22 +469,30 @@ pub fn draw_on_svg(
 
 pub enum GraphicsFormat {
     PNG,
-    SVG
+    SVG,
 }
 
-
-pub fn draw_raw<P: AsRef<path::Path>>(arrays: arrayops::ArrayPair, format: GraphicsFormat, path: P) -> Result<(), Box<dyn std::error::Error>> {
+pub fn draw_raw<P: AsRef<path::Path>>(
+    arrays: arrayops::ArrayPair,
+    format: GraphicsFormat,
+    path: P,
+) -> Result<(), Box<dyn std::error::Error>> {
     match format {
-        GraphicsFormat::PNG => {
-            draw_png_file(&arrays.mz_array, &arrays.intensity_array, path)
-        },
-        GraphicsFormat::SVG => {
-            draw_svg_file(&arrays.mz_array, &arrays.intensity_array, path)
-        }
+        GraphicsFormat::PNG => draw_png_file(&arrays.mz_array, &arrays.intensity_array, path),
+        GraphicsFormat::SVG => draw_svg_file(&arrays.mz_array, &arrays.intensity_array, path),
     }
 }
 
-pub fn draw_peaks<'a, C: CoordinateLike<MZ> + IntensityMeasurement + 'static, I: Iterator<Item = &'a C>, P: AsRef<path::Path>>(peaks: I, format: GraphicsFormat, path: P) -> Result<(), Box<dyn std::error::Error>> {
+pub fn draw_peaks<
+    'a,
+    C: CoordinateLike<MZ> + IntensityMeasurement + 'static,
+    I: Iterator<Item = &'a C>,
+    P: AsRef<path::Path>,
+>(
+    peaks: I,
+    format: GraphicsFormat,
+    path: P,
+) -> Result<(), Box<dyn std::error::Error>> {
     let pair = peaks_to_arrays(peaks).into();
     draw_raw(pair, format, path)
 }
@@ -526,7 +537,10 @@ mod test {
         let mut chart = SVGBuilder::default();
         let mut ser = SpectrumSeries::from(peaks.iter());
         ser.color(RED.mix(1.0));
-        chart.path("test/0.svg").size(1028, 512).add_series(SpectrumSeries::from(&arrays))
+        chart
+            .path("test/0.svg")
+            .size(1028, 512)
+            .add_series(SpectrumSeries::from(&arrays))
             .add_series(ser);
         chart.xlim(179.0, 181.0);
         chart.draw()?;

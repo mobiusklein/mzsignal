@@ -2,11 +2,10 @@ use std::cmp;
 use std::fmt;
 use std::hash;
 
-use mzpeaks::prelude::*;
 use mzpeaks;
+use mzpeaks::prelude::*;
 use mzpeaks::{
-    CentroidLike, CoordinateLike, IndexType, IndexedCoordinate,
-    IntensityMeasurement, MZ,
+    CentroidLike, CoordinateLike, IndexType, IndexedCoordinate, IntensityMeasurement, MZ,
 };
 
 #[derive(Debug, Clone, Default)]

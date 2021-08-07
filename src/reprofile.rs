@@ -25,7 +25,6 @@ pub struct PeakShapeModel<'lifespan> {
     pub shape: PeakShape,
 }
 
-
 impl<'lifespan> CoordinateLike<MZ> for PeakShapeModel<'lifespan> {
     fn coordinate(&self) -> f64 {
         self.peak.coordinate()
@@ -242,7 +241,6 @@ impl<'passing, 'transient: 'passing, 'lifespan: 'transient> PeakSetReprofiler {
         self.reprofile_from_models(models)
     }
 }
-
 
 /// Convert an iterator of peak-like objects into an `ArrayPair` with spacing `dx`
 pub fn reprofile<'transient, 'lifespan: 'transient, T: Iterator<Item = &'lifespan P>, P>(

@@ -2,8 +2,8 @@
 /// interpolation.
 use std::borrow::Cow;
 use std::cmp;
-use std::ops::{Add, Index};
 use std::collections::VecDeque;
+use std::ops::{Add, Index};
 
 #[cfg(feature = "parallelism")]
 use rayon::prelude::*;
@@ -206,12 +206,18 @@ pub fn average_signal<'lifespan>(signal: &[ArrayPair<'lifespan>], dx: f64) -> Ar
         )
     });
     let mut averager = SignalAverager::new(mz_min, mz_max, dx);
-    averager.array_pairs.extend(signal.iter().map(|a|a.borrow()));
+    averager
+        .array_pairs
+        .extend(signal.iter().map(|a| a.borrow()));
     let signal = average_signal_inner(&averager, signal.len());
     ArrayPair::new(Cow::Owned(averager.copy_mz_array()), Cow::Owned(signal))
 }
 
-pub fn rebin<'transient, 'lifespan: 'transient>(mz_array: &'lifespan [f64], intensity_array: &'lifespan [f32], dx: f64) -> ArrayPair<'transient> {
+pub fn rebin<'transient, 'lifespan: 'transient>(
+    mz_array: &'lifespan [f64],
+    intensity_array: &'lifespan [f32],
+    dx: f64,
+) -> ArrayPair<'transient> {
     let pair = [ArrayPair::from((mz_array, intensity_array))];
     average_signal(&pair, dx)
 }

@@ -88,6 +88,6 @@ pub mod text;
 #[cfg(test)]
 mod test_data;
 
-pub use crate::arrayops::{ArrayPair};
+pub use crate::arrayops::ArrayPair;
 pub use crate::peak::FittedPeak;
 pub use crate::peak_picker::{pick_peaks, PeakFitType, PeakPicker, PeakPickerError};

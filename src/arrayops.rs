@@ -147,17 +147,20 @@ impl<'lifespan> ArrayPair<'lifespan> {
     }
 
     pub fn borrow(&'_ self) -> ArrayPair<'_> {
-        ArrayPair::new(Cow::Borrowed(&self.mz_array), Cow::Borrowed(&self.intensity_array))
+        ArrayPair::new(
+            Cow::Borrowed(&self.mz_array),
+            Cow::Borrowed(&self.intensity_array),
+        )
     }
 
     pub fn to_owned(&self) -> ArrayPair<'_> {
         let mz_array = match &self.mz_array {
             Cow::Borrowed(b) => Cow::Owned(b.clone().to_owned()),
-            Cow::Owned(b) => Cow::Owned(b.clone())
+            Cow::Owned(b) => Cow::Owned(b.clone()),
         };
         let intensity_array = match &self.intensity_array {
             Cow::Borrowed(b) => Cow::Owned(b.clone().to_owned()),
-            Cow::Owned(b) => Cow::Owned(b.clone())
+            Cow::Owned(b) => Cow::Owned(b.clone()),
         };
         ArrayPair::new(mz_array, intensity_array)
     }

@@ -28,7 +28,6 @@ where
 const MINIMUM_SIGNAL_TO_NOISE: f32 = 4.0;
 const MAX_WIDTH: f64 = 1.5;
 
-
 /// Approximate signal to noise ratios for  the target intensity value
 pub fn approximate_signal_to_noise<Y: Float + FromPrimitive>(
     target_val: Y,
@@ -198,7 +197,6 @@ pub fn fit_rising_side_width(
     upper
 }
 
-
 /// Fits the right side of a peak
 pub fn fit_falling_side_width(
     mz_array: &[f64],
@@ -296,7 +294,6 @@ pub fn full_width_at_half_max(
     }
     fit
 }
-
 
 /// Fit a gaussian peak shape at `index`.
 pub fn quadratic_fit(mz_array: &[f64], intensity_array: &[f32], index: usize) -> f64 {
