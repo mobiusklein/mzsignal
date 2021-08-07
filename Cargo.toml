@@ -50,4 +50,5 @@ rstest = "0.10.0"
 
 [package.metadata.docs.rs]
 features = ["openblas", "parallelism"]
-default-features = false
+no-default-features = true
+
