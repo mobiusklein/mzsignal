@@ -9,42 +9,33 @@ use crate::histogram::Histogram;
 use crate::search;
 
 struct Window<'lifespan> {
-    pub mz_array: &'lifespan [f64],
     pub intensity_array: &'lifespan mut [f32],
     pub start_index: usize,
     pub end_index: usize,
-    pub center_mz: f64,
     pub mean_intensity: f32,
     pub size: usize,
-    pub is_empty: bool,
     pub histogram: Histogram<f32>,
     bins: usize,
 }
 
 impl<'transient, 'lifespan: 'transient> Window<'lifespan> {
     pub fn new(
-        mz_array: &'lifespan [f64],
         intensity_array: &'lifespan mut [f32],
         start_index: usize,
         end_index: usize,
-        center_mz: f64,
         bins: usize,
-        is_empty: bool,
     ) -> Window<'lifespan> {
         let histogram = Histogram::new(intensity_array, bins);
         let mut window = Window {
-            mz_array,
+            size: intensity_array.len(),
             intensity_array,
             start_index,
             end_index,
-            center_mz,
 
             mean_intensity: 0.0,
-            size: mz_array.len(),
 
             histogram,
             bins,
-            is_empty,
         };
         window.mean_intensity =
             window.intensity_array.iter().sum::<f32>() / (window.intensity_array.len() as f32);
@@ -102,17 +93,15 @@ impl<'transient, 'lifespan: 'transient> Window<'lifespan> {
 
 struct NoiseRegion<'lifespan> {
     pub windows: &'lifespan mut [Window<'lifespan>],
-    pub width: u32,
     pub start_index: usize,
     pub end_index: usize,
     pub size: usize,
 }
 
 impl<'transient, 'lifespan: 'transient> NoiseRegion<'lifespan> {
-    pub fn new(windows: &'lifespan mut [Window<'lifespan>], width: u32) -> NoiseRegion<'lifespan> {
+    pub fn new(windows: &'lifespan mut [Window<'lifespan>]) -> NoiseRegion<'lifespan> {
         let mut inst = NoiseRegion {
             windows,
-            width,
             start_index: 0,
             end_index: 0,
             size: 0,
@@ -229,23 +218,17 @@ fn windowed_spectrum<'lifespan>(
         partition = rest;
         if lo_mz <= mid_point && mid_point <= hi_mz {
             windows.push(Window::new(
-                &mz_array[lo_i..hi_i + 1],
                 chunk,
                 lo_i,
                 hi_i,
-                center_mz,
                 10,
-                false,
             ));
         } else {
             windows.push(Window::new(
-                &mz_array[lo_i..hi_i + 1],
                 chunk,
                 lo_i,
                 hi_i,
-                center_mz,
                 0,
-                true,
             ))
         }
         center_mz += window_size;
@@ -280,7 +263,7 @@ fn group_windows_by_width<'lifespan>(
         let rest = pair.1;
         partition = rest;
         let subset: &'lifespan mut [Window<'lifespan>] = pair.0;
-        let region = NoiseRegion::new(subset, width);
+        let region = NoiseRegion::new(subset);
         result.push(region);
         i += 2 * step;
     }
