@@ -8,7 +8,7 @@ use crate::peak::FittedPeak;
 use crate::peak_statistics::{
     approximate_signal_to_noise, full_width_at_half_max, quadratic_fit, WidthFit,
 };
-use crate::search::{nearest, nearest_binary};
+use crate::search::{nearest, nearest_binary, nearest_left, nearest_right};
 use std::collections::btree_map::{BTreeMap, Entry};
 
 #[derive(Debug, Clone, Copy)]
@@ -151,18 +151,9 @@ impl PeakPicker {
                     partial_fit_state.update(&shape_fit);
                     fwhm = partial_fit_state.full_width_at_half_max;
                     if (0.0 < fwhm) && (fwhm < 0.5) {
-                        let ilow = nearest_binary(
-                            mz_array,
-                            current_mz - partial_fit_state.left_width as f64,
-                            0,
-                            index,
-                        );
-                        let ihigh = nearest_binary(
-                            mz_array,
-                            current_mz + partial_fit_state.right_width as f64,
-                            index,
-                            stop_index,
-                        );
+                        // TODO: Try to use local searches here instead of full range searches
+                        let ilow = nearest_left(mz_array, current_mz - partial_fit_state.left_width as f64, index);
+                        let ihigh = nearest_right(mz_array, current_mz + partial_fit_state.right_width as f64, index);
 
                         let low_intensity = intensity_array[ilow];
                         let high_intensity = intensity_array[ihigh];

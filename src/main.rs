@@ -5,6 +5,7 @@ use std::io;
 use std::io::prelude::*;
 use std::process;
 
+use mzsignal::denoise::denoise;
 use mzsignal::peak::FittedPeak;
 use mzsignal::peak_picker;
 
@@ -14,6 +15,10 @@ fn main() -> io::Result<()> {
         &args[1]
     } else {
         println!("Usage: mzsignal < path OR - >");
+        println!(r#"""
+Will read the input path or STDIN as a tab-separated series of (m/z, intensity) datapoints,
+pick peaks from those points, and write the resulting peaks to STDOUT in tab separated format.
+"""#);
         process::exit(1);
     };
     let mut mz_array: Vec<f64> = Vec::new();
@@ -48,7 +53,10 @@ fn main() -> io::Result<()> {
         }
         eprintln!("Read {} items from STDIN", mz_array.len());
     }
-    let picker = peak_picker::PeakPicker::default();
+    let picker = peak_picker::PeakPicker {
+        signal_to_noise_threshold: 3.0,
+        .. Default::default()
+    };
     let mut acc = Vec::new();
     match picker.discover_peaks(&mz_array, &intensity_array, &mut acc) {
         Ok(count) => {

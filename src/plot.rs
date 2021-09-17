@@ -8,7 +8,7 @@ use plotters::coord::ranged1d::{
     AsRangedCoord, DefaultFormatting, KeyPointHint, NoDefaultFormatting, Ranged, ValueFormatter,
 };
 use plotters::coord::types::{RangedCoordf32, RangedCoordf64};
-pub use plotters::prelude::*;
+use plotters::prelude::*;
 
 use mzpeaks::{CoordinateLike, IntensityMeasurement, MZ};
 

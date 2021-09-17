@@ -69,7 +69,7 @@ pub fn nearest_binary<T: Float>(
     loop {
         let min_val = vec[start_index];
         let max_val = vec[stop_index];
-        if (stop_index - start_index) <= 1 && (target_val >= min_val) && (target_val <= max_val) {
+        if (stop_index as isize - start_index as isize) <= 1 && (target_val >= min_val) && (target_val <= max_val) {
             if (min_val - target_val).abs() < (max_val - target_val).abs() {
                 return start_index;
             } else {
@@ -79,13 +79,18 @@ pub fn nearest_binary<T: Float>(
         let ratio =
             (max_val - target_val).to_f64().unwrap() / (max_val - min_val).to_f64().unwrap();
         // Interpolation search
-        let mid_index = (start_index as f64 * ratio + stop_index as f64 * (1.0 - ratio)) as usize;
-
+        let mut mid_index = (start_index as f64 * ratio + stop_index as f64 * (1.0 - ratio)) as usize;
+        if mid_index >= vec.len() {
+            mid_index = stop_index - 1;
+        }
         let mid_val = vec[mid_index];
 
+        // Binary search lower partition
         if mid_val >= target_val {
             stop_index = mid_index;
-        } else if mid_index + 1 == stop_index {
+        }
+        // Binary search hit end
+        else if mid_index + 1 == stop_index {
             if (mid_val - target_val).abs() < (max_val - target_val).abs() {
                 return mid_index;
             } else {
@@ -93,6 +98,7 @@ pub fn nearest_binary<T: Float>(
             }
         } else {
             let mid_next_val = vec[mid_index + 1];
+            // Close enough value, escape
             if target_val >= mid_val && target_val <= mid_next_val {
                 if (target_val - mid_val) < (mid_next_val - mid_val) {
                     return mid_index;
