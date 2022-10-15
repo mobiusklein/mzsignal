@@ -90,6 +90,13 @@ impl PeakPicker {
         }
     }
 
+    fn is_prominent(&self, prev: f32, cur: f32, next: f32) -> bool {
+        if (prev <= cur) && (cur >= next) && (cur > 0.0) {
+            return true
+        }
+        return false
+    }
+
     #[allow(unused_variables)]
     pub fn fit_peak(
         &self,
@@ -135,14 +142,13 @@ impl PeakPicker {
 
             let last_intensity = intensity_array[index - 1];
             let next_intensity = intensity_array[index + 1];
-            if (current_intensity >= last_intensity)
-                && (current_intensity != 0.0)
-                && (current_intensity >= next_intensity)
+            if self.is_prominent(last_intensity, current_intensity, next_intensity)
                 && (current_intensity >= intensity_threshold)
             {
                 let mut fwhm = 0.0;
                 let mut signal_to_noise =
                     approximate_signal_to_noise(current_intensity, intensity_array, index);
+                eprintln!("Begin fitting peak at {}, mz {:0.3}, intensity {:0.3} ({:0.3}, {:0.3})", index, current_mz, current_intensity, last_intensity, next_intensity);
                 partial_fit_state.signal_to_noise = signal_to_noise;
                 // Run Full-Width Half-Max algorithm to try to improve SNR
                 if signal_to_noise < signal_to_noise_threshold {
@@ -197,8 +203,14 @@ impl PeakPicker {
                             full_width_at_half_max: fwhm,
                             signal_to_noise,
                         };
+                        eprintln!("Storing peak with mz {:0.3}/{:0.3} with FWHM {:0.3}", fitted_mz, current_mz, fwhm);
                         peak_accumulator.push(peak);
+                        partial_fit_state.reset()
+                    } else {
+                        eprintln!("Skipping peak with FWHM {:03} and SNR {:03}", fwhm, signal_to_noise)
                     }
+                } else {
+                    eprintln!("Skipping peak with FWHM {:03} and SNR {:03}", fwhm, signal_to_noise)
                 }
             }
         }
@@ -217,7 +229,7 @@ impl PeakPicker {
     ) -> Result<usize, PeakPickerError> {
         let n = mz_array.len();
         let chunk_size = n / n_chunks;
-        println!("Chunk size: {}, Overhang: {}", chunk_size, overhang);
+        eprintln!("Chunk size: {}, Overhang: {}", chunk_size, overhang);
         if chunk_size <= overhang {
             return self.discover_peaks(mz_array, intensity_array, peak_accumulator);
         }
@@ -227,7 +239,7 @@ impl PeakPicker {
                     ..cmp::min((i + 1) * chunk_size + overhang, n)
             })
             .collect();
-        println!("Windows: {:?}", windows);
+        eprintln!("Windows: {:?}", windows);
         let peaks_or_errors: Vec<Result<(Vec<FittedPeak>, ops::Range<usize>), PeakPickerError>> =
             windows
                 .into_par_iter()
