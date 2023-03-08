@@ -72,12 +72,12 @@ pub fn approximate_signal_to_noise<Y: Float + FromPrimitive>(
 
     if aboutzero(min_intensity_left) {
         if aboutzero(min_intensity_right) {
-            return target_val;
+            target_val
         } else {
-            return target_val / min_intensity_right;
+            target_val / min_intensity_right
         }
     }
-    if min_intensity_right < min_intensity_left && aboutzero(min_intensity_right) {
+    else if min_intensity_right < min_intensity_left && !aboutzero(min_intensity_right) {
         target_val / min_intensity_right
     } else {
         target_val / min_intensity_left
@@ -85,46 +85,48 @@ pub fn approximate_signal_to_noise<Y: Float + FromPrimitive>(
 }
 
 #[allow(non_snake_case)]
-pub fn curve_regression(xs: &[f64], ys: &[f32], n: usize, terms: &mut [f64; 2]) -> f64 {
+pub fn curve_regression<T: Float + Into<f64>, U: Float + Into<f64>>(xs: &[T], ys: &[U], n: usize, terms: &mut [f64; 2]) -> f64 {
     // Based upon
     // https://github.com/PNNL-Comp-Mass-Spec/DeconTools/blob/0a7bde357af0551bedf44368c847cc15c70c7ace/DeconTools.Backend/ProcessingTasks/Deconvoluters/HornDeconvolutor/ThrashV1/PeakProcessing/PeakStatistician.cs#L227
-    let weights = Array1::<f64>::ones((n,));
-
-    let n_terms: usize = 2;
+    let n_terms: usize = 1;
 
     let mut A = Array2::<f64>::zeros((2, n));
     for i in 0..n {
-        A[[0, i]] = weights[i];
+        A[[0, i]] = 1.0;
         for j in 1..n_terms {
-            A[[j, i]] = A[[j - 1, i]] * xs[i];
+            A[[j, i]] = A[[j - 1, i]] * xs[i].into();
         }
     }
 
     let mut Z = Array2::<f64>::zeros((n, 1));
     for i in 0..n {
-        Z[[i, 0]] = weights[i] * ys[i] as f64;
+        Z[[i, 0]] = 1.0f64 * ys[i].into();
     }
 
     let A_t = A.t();
     let A_A_t = A.dot(&A_t);
-    let iA_A_t = A_A_t.inv().unwrap();
-    let iA_A_t_A = iA_A_t.dot(&A);
-    let B = iA_A_t_A.dot(&Z);
+    if let Ok(iA_A_t) = A_A_t.inv() {
+        let iA_A_t_A = iA_A_t.dot(&A);
+        let B = iA_A_t_A.dot(&Z);
 
-    let mut mse: f64 = 0.0;
-    // This seems to be just reading out the final dimension's terms
-    for i in 0..n {
-        terms[0] = B[[0, 0]];
-        let mut y_fit = B[[0, 0]];
-        let mut x_pow = xs[i];
-        for j in 1..n_terms {
-            terms[j] = B[[j, 0]];
-            y_fit += B[[j, 0]] * x_pow;
-            x_pow *= xs[i];
+        let mut mse: f64 = 0.0;
+        // This seems to be just reading out the final dimension's terms
+        for i in 0..n {
+            terms[0] = B[[0, 0]];
+            let mut y_fit = B[[0, 0]];
+            let mut x_pow: f64 = xs[i].into();
+            for j in 1..n_terms {
+                terms[j] = B[[j, 0]];
+                y_fit += B[[j, 0]] * x_pow;
+                x_pow *= xs[i].into();
+            }
+            mse += ys[i].into() - y_fit;
         }
-        mse += ys[i] as f64 - y_fit;
+        mse
+    } else {
+        terms.fill(0.0);
+        0.0
     }
-    mse
 }
 
 #[derive(Default, Debug, Clone)]
@@ -144,6 +146,11 @@ pub fn fit_rising_side_width(
     let peak = intensity_array[data_index];
     let peak_half = peak / 2.0;
     let mz = mz_array[data_index];
+    let mut last_y1 = peak;
+
+    if peak == 0.0 {
+        return mz
+    }
 
     let mut upper = mz_array[0];
     for index in (0..=data_index).rev() {
@@ -154,6 +161,7 @@ pub fn fit_rising_side_width(
         // peak, or the signal to noise is bad and it just looks like we're near
         // signal that will be increasing
         if (y1 < peak_half)
+            || (y1 > last_y1)
             || (mz - current_mz).abs() > MAX_WIDTH
             || ((index < 1 || intensity_array[index - 1] > y1)
                 && (index < 2 || intensity_array[index - 2] > y1)
@@ -178,12 +186,12 @@ pub fn fit_rising_side_width(
                         .windows(2)
                         .all(|w| (w[0] - w[1]).abs() < 1e-3)
                     {
-                        upper = 0.0;
+                        upper = mz;
                     } else {
                         let mut coefs = [0.0; 2];
                         curve_regression(
+                            &intensity_array[iv.clone()],
                             &mz_array[iv.clone()],
-                            &intensity_array[iv],
                             points,
                             &mut coefs,
                         );
@@ -193,6 +201,7 @@ pub fn fit_rising_side_width(
             }
             break;
         }
+        last_y1 = y1;
     }
     upper
 }
@@ -209,6 +218,11 @@ pub fn fit_falling_side_width(
     let mz = mz_array[data_index];
     let n = mz_array.len() - 1;
     let mut lower = mz_array[n];
+    let mut last_y1 = peak;
+
+    if peak == 0.0 {
+        return mz
+    }
 
     for index in data_index..n {
         let current_mz = mz_array[index];
@@ -219,6 +233,7 @@ pub fn fit_falling_side_width(
         // signal that will be increasing
         if (y1 < peak_half)
             || ((mz - current_mz).abs() > MAX_WIDTH)
+            || (y1 > last_y1)
             || (((index > n - 1) || intensity_array[index + 1] > y1)
                 && ((index > n - 2) || intensity_array[index + 2] > y1)
                 && signal_to_noise < MINIMUM_SIGNAL_TO_NOISE)
@@ -238,12 +253,12 @@ pub fn fit_falling_side_width(
                         .windows(2)
                         .all(|w| (w[0] - w[1]).abs() < 1e-3)
                     {
-                        lower = 0.0;
+                        lower = mz;
                     } else {
                         let mut coefs = [0.0; 2];
                         curve_regression(
+                            &intensity_array[iv.clone()],
                             &mz_array[iv.clone()],
-                            &intensity_array[iv],
                             points,
                             &mut coefs,
                         );
@@ -253,6 +268,7 @@ pub fn fit_falling_side_width(
             }
             break;
         }
+        last_y1 = y1;
     }
     lower
 }
@@ -316,5 +332,30 @@ pub fn quadratic_fit(mz_array: &[f64], intensity_array: &[f32], index: usize) ->
             // mz_fit
             ((x1 + x2) - ((y2 - y1) * (x3 - x2) * (x1 - x3)) / d) / 2.0
         }
+    }
+}
+
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::test_data::{read_1col, read_cols};
+    use std::io;
+    use std::io::prelude::*;
+    use std::fs;
+
+    #[test]
+    fn test_snr() -> io::Result<()> {
+        let coords = read_1col::<usize>("./test/peak_coords.txt")?;
+        let cols = read_cols::<f64, 2>("./test/0.txt")?;
+        let xs = &cols[0];
+        let ys = &cols[1];
+
+        for coord in coords {
+            let snr = approximate_signal_to_noise(ys[coord], &ys, coord);
+            println!("{}\t{}\t{}", coord, snr, xs[coord]);
+        }
+
+        Ok(())
     }
 }

@@ -380,7 +380,7 @@ mod test {
         let mut picker = PeakPicker::default();
         picker.signal_to_noise_threshold = 3.0;
         picker.discover_peaks(&X, &yhat, &mut acc).unwrap();
-        assert_eq!(acc.len(), 10);
+        assert_eq!(acc.len(), 19);
 
         let denoiser = SignalBackgroundDenoiser::default();
         denoiser.denoise(&X, &mut yhat, 5.0).unwrap();

@@ -1,10 +1,13 @@
 use std::cmp;
 use std::ops;
 
+use log::{info, debug};
+
 #[cfg(feature = "parallelism")]
 use rayon::prelude::*;
 
 use crate::peak::FittedPeak;
+use crate::peak_statistics::isclose;
 use crate::peak_statistics::{
     approximate_signal_to_noise, full_width_at_half_max, quadratic_fit, WidthFit,
 };
@@ -135,7 +138,9 @@ impl PeakPicker {
 
         let mut partial_fit_state = PartialPeakFit::default();
 
-        for index in start_index..=stop_index {
+        let mut index = start_index;
+
+        while index <= stop_index {
             partial_fit_state.reset();
             let current_intensity = intensity_array[index];
             let current_mz = mz_array[index];
@@ -148,7 +153,7 @@ impl PeakPicker {
                 let mut fwhm = 0.0;
                 let mut signal_to_noise =
                     approximate_signal_to_noise(current_intensity, intensity_array, index);
-                eprintln!("Begin fitting peak at {}, mz {:0.3}, intensity {:0.3} ({:0.3}, {:0.3})", index, current_mz, current_intensity, last_intensity, next_intensity);
+                // eprintln!("Begin fitting peak at {}, mz {:0.3}, intensity {:0.3} ({:0.3}, {:0.3})", index, current_mz, current_intensity, last_intensity, next_intensity);
                 partial_fit_state.signal_to_noise = signal_to_noise;
                 // Run Full-Width Half-Max algorithm to try to improve SNR
                 if signal_to_noise < signal_to_noise_threshold {
@@ -203,16 +208,22 @@ impl PeakPicker {
                             full_width_at_half_max: fwhm,
                             signal_to_noise,
                         };
-                        eprintln!("Storing peak with mz {:0.3}/{:0.3} with FWHM {:0.3}", fitted_mz, current_mz, fwhm);
+                        // eprintln!("Storing peak with mz {:0.3}/{:0.3} with FWHM {:0.3}", fitted_mz, current_mz, fwhm);
                         peak_accumulator.push(peak);
-                        partial_fit_state.reset()
+                        partial_fit_state.reset();
+                        while index < stop_index && isclose(intensity_array[index + 1], current_intensity) {
+                            // eprintln!("Advancing over equal intensity point {} @ {}", index, current_intensity);
+                            index += 1;
+                        }
+
                     } else {
-                        eprintln!("Skipping peak with FWHM {:03} and SNR {:03}", fwhm, signal_to_noise)
+                        // eprintln!("Skipping peak with FWHM {:03} and SNR {:03}", fwhm, signal_to_noise)
                     }
                 } else {
-                    eprintln!("Skipping peak with FWHM {:03} and SNR {:03}", fwhm, signal_to_noise)
+                    // eprintln!("Skipping peak with FWHM {:03} and SNR {:03}", fwhm, signal_to_noise)
                 }
             }
+            index += 1;
         }
         Ok(peak_accumulator.len() - m)
     }
@@ -401,7 +412,7 @@ mod test {
             .collect();
         let result = picker.discover_peaks(&X, &yhat, &mut acc);
         let z = result.expect("Should not encounter an error");
-        assert_eq!(z, 5);
+        assert_eq!(z, 8);
     }
 
     #[test]

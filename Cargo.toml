@@ -1,7 +1,7 @@
 [package]
 name = "mzsignal"
 version = "0.2.3"
-edition = "2018"
+edition = "2021"
 
 keywords = [
     'mass-spectrometry',
@@ -32,17 +32,20 @@ lto = true
 default = ["intel-mkl", "parallelism"]
 openblas = ["ndarray-linalg/openblas"]
 netlib = ["ndarray-linalg/netlib"]
-intel-mkl = ["ndarray-linalg/intel-mkl"]
+intel-mkl = ["ndarray-linalg/intel-mkl-static"]
 parallelism = ["rayon"]
+
+plotting = ["plotters"]
 
 [dependencies]
 log = "0.4.14"
+pretty_env_logger = "0.4.0"
 num-traits = "0.2"
-ndarray = "0.15.3"
-ndarray-linalg = {version = "0.14.0"}
+ndarray = "0.15.6"
+ndarray-linalg = {version = "0.16.0"}
 cfg-if = "1.0.0"
 rayon = { version = "1.5.1", optional = true }
-plotters = { version = "0.3.1" }
+plotters = { version = "0.3.1", optional = true}
 mzpeaks = { version="0.4.0" }
 
 [dev-dependencies]
