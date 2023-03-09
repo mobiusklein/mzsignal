@@ -1,0 +1,314 @@
+use std::borrow::Cow;
+use std::ops::Index;
+
+use pyo3::exceptions::{PyException, PyIndexError, PyTypeError};
+use pyo3::types::{PySlice, PyLong};
+use pyo3::prelude::*;
+
+use numpy::{PyReadonlyArray1, PyArray1, ToPyArray};
+
+use mzsignal::peak_statistics::{approximate_signal_to_noise, full_width_at_half_max};
+use mzsignal::{FittedPeak, PeakPickerError, PeakPicker, ArrayPair};
+use mzsignal::denoise::{denoise};
+use mzsignal::average::average_signal;
+
+use mzpeaks::{CoordinateLike, IndexedCoordinate, IntensityMeasurement};
+use mzpeaks::coordinate::MZ;
+use mzpeaks::MassErrorType as _MassErrorType;
+use mzpeaks::peak_set::{PeakCollection, PeakSetVec};
+
+
+#[pyclass]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MassError {
+    Absolute,
+    PPM
+}
+
+impl Default for MassError {
+    fn default() -> Self {
+        Self::PPM
+    }
+}
+
+impl Into<_MassErrorType> for MassError {
+    fn into(self) -> _MassErrorType {
+        match self {
+            Self::Absolute => _MassErrorType::Absolute,
+            Self::PPM => _MassErrorType::PPM
+        }
+    }
+}
+
+
+
+#[pyclass]
+#[derive(Debug, Clone, PartialEq, PartialOrd)]
+pub struct PyFittedPeak(FittedPeak);
+
+impl PyFittedPeak {
+    pub fn new(peak: FittedPeak) -> Self {
+        Self(peak)
+    }
+}
+
+impl From<FittedPeak> for PyFittedPeak {
+    fn from(value: FittedPeak) -> Self {
+        Self::new(value)
+    }
+}
+
+impl CoordinateLike<MZ> for PyFittedPeak {
+    fn coordinate(&self) -> f64 {
+        self.mz()
+    }
+}
+
+impl IndexedCoordinate<MZ> for PyFittedPeak {
+    fn get_index(&self) -> mzpeaks::IndexType {
+        self.0.index
+    }
+
+    fn set_index(&mut self, index: mzpeaks::IndexType) {
+        self.0.index = index
+    }
+}
+
+impl IntensityMeasurement for PyFittedPeak {
+    fn intensity(&self) -> f32 {
+        self.0.intensity
+    }
+}
+
+
+#[pymethods]
+impl PyFittedPeak {
+
+    #[getter]
+    fn mz(&self) -> f64 {
+        self.0.mz
+    }
+
+    #[getter]
+    fn intensity(&self) -> f32 {
+        self.0.intensity
+    }
+
+    #[getter]
+    fn index(&self) -> u32 {
+        return self.0.index
+    }
+
+    #[getter]
+    fn signal_to_noise(&self) -> f32 {
+        self.0.signal_to_noise
+    }
+
+    #[getter]
+    fn full_width_at_half_max(&self) -> f32 {
+        self.0.full_width_at_half_max
+    }
+
+    fn __repr__(&self) -> String {
+        format!("PyFittedPeak({:0.4}, {:0.4}, {}, {:0.4}, {:0.4})", self.mz(), self.intensity(), self.index(), self.signal_to_noise(), self.full_width_at_half_max())
+    }
+}
+
+
+#[pyclass(sequence)]
+#[derive(Debug, Clone, PartialEq)]
+pub struct PyPeakSet(PeakSetVec<PyFittedPeak, MZ>);
+
+impl Index<usize> for PyPeakSet {
+    type Output = PyFittedPeak;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        self.0.index(index)
+    }
+}
+
+impl PeakCollection<PyFittedPeak, MZ> for PyPeakSet {
+    fn push(&mut self, peak: PyFittedPeak) -> mzpeaks::peak_set::OrderUpdateEvent {
+        self.0.push(peak)
+    }
+
+    fn sort(&mut self) {
+        self.0.sort()
+    }
+
+    fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    fn get_item(&self, i: usize) -> &PyFittedPeak {
+        self.0.get_item(i)
+    }
+
+    fn get_slice(&self, i: std::ops::Range<usize>) -> &[PyFittedPeak] {
+        self.0.get_slice(i)
+    }
+
+    fn search_by(&self, query: f64) -> Result<usize, usize> {
+        self.0.search_by(query)
+    }
+}
+
+impl PyPeakSet {
+    pub fn new(peaks: Vec<PyFittedPeak>) -> Self {
+        PyPeakSet(PeakSetVec::new(peaks))
+    }
+}
+
+
+#[pymethods]
+impl PyPeakSet {
+
+    #[new]
+    pub fn py_new(peaks: Vec<PyFittedPeak>) -> Self {
+        PyPeakSet(PeakSetVec::new(peaks))
+    }
+
+    #[pyo3(signature=(mz, error_tolerance=10.0, error_type=MassError::PPM))]
+    pub fn has_peak(&self, mz: f64, error_tolerance: f64, error_type: MassError) -> Option<PyFittedPeak> {
+        if let Some(peak) = self.0.has_peak(mz, error_tolerance, error_type.into()) {
+            Some(peak.clone())
+        } else {
+            None
+        }
+    }
+
+    fn __getitem__(&self, i: &PyAny) -> PyResult<PyFittedPeak> {
+        if i.is_instance_of::<PySlice>()? {
+            Err(PyTypeError::new_err("Could not select indices by slice"))
+        } else if i.is_instance_of::<PyLong>()? {
+            let i: usize = i.extract()?;
+            if i >= self.len() {
+                Err(PyIndexError::new_err(i))
+            } else {
+                Ok(self[i].clone())
+            }
+        } else {
+            Err(PyTypeError::new_err("Could not select indices from input"))
+        }
+    }
+
+    fn __len__(&self) -> usize {
+        self.len()
+    }
+
+    fn __repr__(&self) -> String {
+        format!("PyPeakSet({} peaks)", self.len())
+    }
+}
+
+
+#[pyfunction]
+#[pyo3(name = "approximate_signal_to_noise")]
+fn py_approximate_signal_to_noise(intensity_array: PyReadonlyArray1<f32>, index: usize) -> PyResult<f32> {
+    let tmp = intensity_array.as_slice()?;
+    let result = approximate_signal_to_noise(tmp[index], tmp, index);
+    return Ok(result)
+}
+
+
+#[pyfunction]
+#[pyo3(name = "fit_full_width_at_half_max")]
+fn py_fit_full_width_at_half_max(mz_array: PyReadonlyArray1<f64>, intensity_array: PyReadonlyArray1<f32>, index: usize) -> PyResult<(f64, f64, f64)> {
+    let intensity_view = intensity_array.as_slice()?;
+    let mz_view = mz_array.as_slice()?;
+    let signal_to_noise = approximate_signal_to_noise(intensity_view[index], intensity_view, index);
+    let fwhm = full_width_at_half_max(mz_view, intensity_view, index, signal_to_noise);
+    let res = (fwhm.full_width_at_half_max, fwhm.left_width, fwhm.right_width);
+    return Ok(res);
+}
+
+
+#[pyfunction]
+#[pyo3(name = "denoise", signature = (mz_array, intensity_array, scale = 5.0, inplace = true))]
+fn py_denoise<'py>(mz_array: PyReadonlyArray1<f64>, intensity_array: &'py PyArray1<f32>, scale: f32, inplace: bool) -> PyResult<Py<PyArray1<f32>>>{
+    let mz_view = mz_array.as_slice()?;
+    if inplace {
+        unsafe {
+            let view = intensity_array.as_slice_mut()?;
+            let res = denoise(mz_view,  view, scale);
+            match res {
+                Ok(_view) => {
+                    Ok(intensity_array.into())
+                },
+                Err(_) => Err(PyException::new_err("An error occurred while denoising"))
+            }
+        }
+    } else {
+        let mut intensity_vec: Vec<f32> = intensity_array.extract()?;
+        let res = denoise(mz_view, intensity_vec.as_mut_slice(), scale);
+        match res {
+            Ok(_view) => {
+                let pyarray = Python::with_gil(|py| -> Py<PyArray1<f32>>{
+                    let result = PyArray1::from_iter(py, intensity_vec);
+                    result.to_owned()
+                });
+                Ok(pyarray)
+            },
+            Err(_) => Err(PyException::new_err("An error occurred while denoising"))
+        }
+    }
+}
+
+
+#[pyfunction]
+#[pyo3(name = "average_signal", signature = (array_pairs, dx = 0.005))]
+fn py_average_signal(array_pairs: Vec<(PyReadonlyArray1<f64>, PyReadonlyArray1<f32>)>, dx: f64) -> PyResult<(Py<PyArray1<f64>>, Py<PyArray1<f32>>)> {
+    let wrapped_pairs: Vec<ArrayPair> = array_pairs.iter().map(|(x, y)| {
+        ArrayPair::new(
+            Cow::Borrowed(x.as_slice().unwrap()),
+            Cow::Borrowed(y.as_slice().unwrap()))
+    }).collect();
+
+    let new_arrays = average_signal(&wrapped_pairs, dx);
+    Python::with_gil(|py| {
+        let x = new_arrays.mz_array.to_pyarray(py).into();
+        let y = new_arrays.intensity_array.to_pyarray(py).into();
+        Ok((x, y))
+    })
+}
+
+
+#[pyfunction]
+#[pyo3(name = "pick_peaks", signature = (mz_array, intensity_array, signal_to_noise_threshold=1.0))]
+fn py_pick_peaks(mz_array: PyReadonlyArray1<f64>,
+                 intensity_array: PyReadonlyArray1<f32>,
+                 signal_to_noise_threshold: f32) -> PyResult<PyPeakSet> {
+    let picker = PeakPicker{
+        signal_to_noise_threshold,
+        ..PeakPicker::default()
+    };
+
+    let mut acc = Vec::new();
+    let peaks_res = picker.discover_peaks(mz_array.as_slice()?, intensity_array.as_slice()?, &mut acc);
+    match peaks_res {
+        Ok(_) => {
+            let pypeaks: Vec<PyFittedPeak> = acc.into_iter().map(|p| { PyFittedPeak(p) }).collect();
+            return Ok(PyPeakSet::new(pypeaks))
+        },
+        Err(err) => {
+            match err {
+                PeakPickerError::IntervalTooSmall => Err(PyException::new_err("Interval is too small")),
+                PeakPickerError::MZIntensityMismatch => Err(PyException::new_err("mz_array and intensity_array must have the same size")),
+                PeakPickerError::Unknown => Err(PyException::new_err("Unknown error"))
+            }
+        }
+    }
+}
+
+
+/// A Python module implemented in Rust.
+#[pymodule]
+fn pymzsignal(_py: Python, m: &PyModule) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(py_approximate_signal_to_noise, m)?)?;
+    m.add_function(wrap_pyfunction!(py_pick_peaks, m)?)?;
+    m.add_function(wrap_pyfunction!(py_denoise, m)?)?;
+    m.add_function(wrap_pyfunction!(py_average_signal, m)?)?;
+    m.add_function(wrap_pyfunction!(py_fit_full_width_at_half_max, m)?)?;
+    m.add_class::<PyFittedPeak>()?;
+    Ok(())
+}
