@@ -9,6 +9,7 @@ use plotters::coord::ranged1d::{
 };
 use plotters::coord::types::{RangedCoordf32, RangedCoordf64};
 use plotters::prelude::*;
+pub use plotters::prelude::RED;
 
 use mzpeaks::{CoordinateLike, IntensityMeasurement, MZ};
 
