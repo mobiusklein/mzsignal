@@ -30,7 +30,7 @@ lto = true
 # local dependency crate
 [features]
 default = ["intel-mkl", "parallelism"]
-openblas = ["ndarray-linalg/openblas"]
+openblas = ["ndarray-linalg/openblas-static"]
 netlib = ["ndarray-linalg/netlib"]
 intel-mkl = ["ndarray-linalg/intel-mkl-static"]
 parallelism = ["rayon"]
