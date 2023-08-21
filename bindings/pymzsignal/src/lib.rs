@@ -1,49 +1,57 @@
 use std::borrow::Cow;
 use std::ops::Index;
 
-use pyo3::exceptions::{PyException, PyIndexError, PyTypeError};
-use pyo3::types::{PySlice, PyLong};
+use pyo3::exceptions::{PyException, PyIndexError, PyTypeError, PyValueError};
+use pyo3::types::{PySlice, PyLong, PyFloat, PyString};
 use pyo3::prelude::*;
 
 use numpy::{PyReadonlyArray1, PyArray1, ToPyArray};
 
 use mzsignal::peak_statistics::{approximate_signal_to_noise, full_width_at_half_max};
 use mzsignal::{FittedPeak, PeakPickerError, PeakPicker, ArrayPair};
-use mzsignal::denoise::{denoise};
+use mzsignal::denoise::denoise;
 use mzsignal::average::average_signal;
 
 use mzpeaks::{CoordinateLike, IndexedCoordinate, IntensityMeasurement};
 use mzpeaks::coordinate::MZ;
-use mzpeaks::MassErrorType as _MassErrorType;
+use mzpeaks::Tolerance as _Tolerance;
 use mzpeaks::peak_set::{PeakCollection, PeakSetVec};
 
 
 #[pyclass]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum MassError {
-    Absolute,
-    PPM
-}
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+pub struct Tolerance(_Tolerance);
 
-impl Default for MassError {
-    fn default() -> Self {
-        Self::PPM
+impl Into<_Tolerance> for Tolerance {
+    fn into(self) -> _Tolerance {
+        self.0
     }
 }
 
-impl Into<_MassErrorType> for MassError {
-    fn into(self) -> _MassErrorType {
-        match self {
-            Self::Absolute => _MassErrorType::Absolute,
-            Self::PPM => _MassErrorType::PPM
-        }
+#[allow(non_snake_case)]
+#[pymethods]
+impl Tolerance {
+
+    #[staticmethod]
+    fn Da(value: f64) -> PyResult<Self> {
+        Ok(Self(_Tolerance::Da(value)))
+    }
+
+    #[staticmethod]
+    fn PPM(value: f64) -> PyResult<Self> {
+        Ok(Self(_Tolerance::PPM(value)))
+    }
+
+    fn __repr__(&self) -> String {
+        self.0.to_string()
     }
 }
+
 
 
 
 #[pyclass]
-#[derive(Debug, Clone, PartialEq, PartialOrd)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub struct PyFittedPeak(FittedPeak);
 
 impl PyFittedPeak {
@@ -160,6 +168,47 @@ impl PyPeakSet {
 }
 
 
+
+#[derive(Debug)]
+pub struct ErrorToleranceArg(Tolerance);
+
+
+impl From<f64> for ErrorToleranceArg {
+    fn from(value: f64) -> Self {
+        Self(Tolerance::PPM(value).unwrap())
+    }
+}
+
+
+impl<'a> FromPyObject<'a> for ErrorToleranceArg {
+    fn extract(ob: &'a PyAny) -> PyResult<Self> {
+        if ob.is_instance_of::<PyFloat>()? {
+            Ok(ErrorToleranceArg(ob.extract()?))
+        }
+        else if ob.is_instance_of::<Tolerance>()? {
+            Ok(ErrorToleranceArg(ob.extract()?))
+        }
+        else if ob.is_instance_of::<PyString>()? {
+            let s: &str = ob.extract()?;
+            match s.parse::<_Tolerance>() {
+                Ok(v) => Ok(ErrorToleranceArg(Tolerance(v))),
+                Err(e) => Err(PyValueError::new_err(format!("Failed to parse error tolerance: {}", e)))
+            }
+        }
+        else {
+            Err(PyTypeError::new_err("Could not convert object to tolerance"))
+        }
+    }
+}
+
+
+impl Into<_Tolerance> for ErrorToleranceArg {
+    fn into(self) -> _Tolerance {
+        self.0.into()
+    }
+}
+
+
 #[pymethods]
 impl PyPeakSet {
 
@@ -168,13 +217,22 @@ impl PyPeakSet {
         PyPeakSet(PeakSetVec::new(peaks))
     }
 
-    #[pyo3(signature=(mz, error_tolerance=10.0, error_type=MassError::PPM))]
-    pub fn has_peak(&self, mz: f64, error_tolerance: f64, error_type: MassError) -> Option<PyFittedPeak> {
-        if let Some(peak) = self.0.has_peak(mz, error_tolerance, error_type.into()) {
+    #[pyo3(signature=(mz, error_tolerance=10.0f64.into()))]
+    pub fn has_peak(&self, mz: f64, error_tolerance: ErrorToleranceArg) -> Option<PyFittedPeak> {
+        if let Some(peak) = self.0.has_peak(mz, error_tolerance.into()) {
             Some(peak.clone())
         } else {
             None
         }
+    }
+
+    pub fn all_peaks_for(&self, mz: f64, error_tolerance: ErrorToleranceArg) -> PyResult<Vec<PyFittedPeak>> {
+        let res = self.0.all_peaks_for(mz, error_tolerance.into()).iter().copied().collect::<Vec<_>>();
+        Ok(res)
+    }
+
+    pub fn between(&self, m1: f64, m2: f64) -> PyResult<Vec<PyFittedPeak>> {
+        Ok(self.0.between(m1, m2, _Tolerance::PPM(10.0)).into_iter().copied().collect())
     }
 
     fn __getitem__(&self, i: &PyAny) -> PyResult<PyFittedPeak> {

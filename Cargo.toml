@@ -1,6 +1,6 @@
 [package]
 name = "mzsignal"
-version = "0.2.4"
+version = "0.3.0"
 edition = "2021"
 
 keywords = [
@@ -22,7 +22,6 @@ documentation = "https://docs.rs/mzsignal"
 
 [lib]
 name = "mzsignal"
-src = "src/lib.rs"
 
 [profile.release]
 lto = true
@@ -46,7 +45,7 @@ ndarray-linalg = {version = "0.16.0"}
 cfg-if = "1.0.0"
 rayon = { version = "1.5.1", optional = true }
 plotters = { version = "0.3.4", optional = true}
-mzpeaks = { version="0.4.0" }
+mzpeaks = { version="0.6.0" }
 
 [dev-dependencies]
 rstest = "0.10.0"

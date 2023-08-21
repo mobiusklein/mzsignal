@@ -3,12 +3,14 @@ use std::fmt;
 use std::hash;
 
 use mzpeaks;
+use mzpeaks::CentroidPeak;
+use mzpeaks::peak::MZPoint;
 use mzpeaks::prelude::*;
 use mzpeaks::{
     CentroidLike, CoordinateLike, IndexType, IndexedCoordinate, IntensityMeasurement, MZ,
 };
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Copy, Default)]
 /// A [`FittedPeak`] implements the [`CentroidLike`](https://docs.rs/mzpeaks/latest/mzpeaks/peak/trait.CentroidLike.html) trait
 /// with an m/z coordinate, but also a shape attribute `full_width_at_half_max` and a
 /// intensity uncertainty, `signal_to_noise_ratio`.
@@ -26,6 +28,17 @@ pub struct FittedPeak {
 
 // Implement the CentroidLike interface
 mzpeaks::implement_centroidlike!(FittedPeak, true);
+
+impl From<MZPoint> for FittedPeak {
+    fn from(value: MZPoint) -> Self {
+        Self {
+            mz: value.mz,
+            intensity: value.intensity,
+            index: value.get_index(),
+            ..Default::default()
+        }
+    }
+}
 
 impl fmt::Display for FittedPeak {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {

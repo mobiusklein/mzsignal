@@ -374,6 +374,7 @@ pub const NOISE: [f32; 120] = [
 ];
 
 
+#[allow(dead_code)]
 pub fn read_1col<T: FromStr>(path: &str) -> io::Result<Vec<T>> {
     let mut f = fs::File::open(path)?;
     let mut buffer = String::new();
@@ -390,6 +391,7 @@ pub fn read_1col<T: FromStr>(path: &str) -> io::Result<Vec<T>> {
 }
 
 
+#[allow(dead_code)]
 pub fn read_cols<T: FromStr, const N: usize>(path: &str) -> io::Result<Vec<Vec<T>>> {
     let mut f = fs::File::open(path)?;
     let mut buffer = String::new();
