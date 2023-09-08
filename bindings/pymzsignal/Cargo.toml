@@ -12,5 +12,5 @@ crate-type = ["cdylib"]
 pyo3 = {version = "0.18.1", features=["extension-module"]}
 ndarray = "0.15.6"
 mzsignal = { path = "../../../mzsignal", version = "0.3.0" }
-mzpeaks = "0.6.0"
+mzpeaks = "0.7.0"
 numpy = "0.18"
