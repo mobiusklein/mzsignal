@@ -5,7 +5,11 @@ jobs:
 
   test:
     name: Test Suite
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+        linalg-backend: ["intel-mkl", "nalgebra"]
     steps:
       - name: Checkout sources
         uses: actions/checkout@v2
@@ -17,8 +21,8 @@ jobs:
           toolchain: stable
           override: true
 
-      - name: Run cargo test
+      - name: Run tests with ${{ matrix.linalg-backend }}
         uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --no-default-features --features intel-mkl
+          args: --no-default-features --features ${{ matrix.linalg-backend }}

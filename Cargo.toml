@@ -56,6 +56,6 @@ nalgebra = { version = "0.32.3", optional = true }
 rstest = "0.18.2"
 
 [package.metadata.docs.rs]
-features = ["openblas", "parallelism"]
+features = ["nalgebra", "parallelism"]
 no-default-features = true
 
