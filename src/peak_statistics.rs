@@ -1,7 +1,12 @@
+use std::fmt::Debug;
+
+use cfg_if::cfg_if;
 use num_traits;
 use num_traits::{Float, FromPrimitive};
 
-use ndarray::{Array1, Array2};
+#[cfg(feature = "ndarray")]
+use ndarray::Array2;
+#[cfg(feature = "ndarray-linalg")]
 use ndarray_linalg::Inverse;
 
 pub fn _isclose<T>(x: T, y: T, rtol: T, atol: T) -> bool
@@ -84,8 +89,20 @@ pub fn approximate_signal_to_noise<Y: Float + FromPrimitive>(
     }
 }
 
+pub fn curve_regression<T: Float + Into<f64> + Debug, U: Float + Into<f64> + Debug>(xs: &[T], ys: &[U], n: usize, terms: &mut [f64; 2]) -> f64 {
+    cfg_if! {
+        if #[cfg(feature = "ndarray")] {
+            return curve_regression_ndarray(xs, ys, n, terms);
+        }
+        else if #[cfg(feature = "nalgebra")] {
+            return curve_regression_nalgebra(xs, ys, n, terms);
+        }
+    }
+}
+
 #[allow(non_snake_case)]
-pub fn curve_regression<T: Float + Into<f64>, U: Float + Into<f64>>(xs: &[T], ys: &[U], n: usize, terms: &mut [f64; 2]) -> f64 {
+#[cfg(feature = "ndarray")]
+pub fn curve_regression_ndarray<T: Float + Into<f64>, U: Float + Into<f64>>(xs: &[T], ys: &[U], n: usize, terms: &mut [f64; 2]) -> f64 {
     // Based upon
     // https://github.com/PNNL-Comp-Mass-Spec/DeconTools/blob/0a7bde357af0551bedf44368c847cc15c70c7ace/DeconTools.Backend/ProcessingTasks/Deconvoluters/HornDeconvolutor/ThrashV1/PeakProcessing/PeakStatistician.cs#L227
     let n_terms: usize = 1;
@@ -118,6 +135,55 @@ pub fn curve_regression<T: Float + Into<f64>, U: Float + Into<f64>>(xs: &[T], ys
             for j in 1..n_terms {
                 terms[j] = B[[j, 0]];
                 y_fit += B[[j, 0]] * x_pow;
+                x_pow *= xs[i].into();
+            }
+            mse += ys[i].into() - y_fit;
+        }
+        mse
+    } else {
+        terms.fill(0.0);
+        0.0
+    }
+}
+
+#[allow(non_snake_case)]
+#[cfg(feature = "nalgebra")]
+pub fn curve_regression_nalgebra<T: Float + Into<f64> + Debug, U: Float + Into<f64> + Debug>(xs: &[T], ys: &[U], n: usize, terms: &mut [f64; 2]) -> f64 {
+    use nalgebra;
+    use nalgebra::{Matrix, Dim, dimension::Dyn};
+    // Based upon
+    // https://github.com/PNNL-Comp-Mass-Spec/DeconTools/blob/0a7bde357af0551bedf44368c847cc15c70c7ace/DeconTools.Backend/ProcessingTasks/Deconvoluters/HornDeconvolutor/ThrashV1/PeakProcessing/PeakStatistician.cs#L227
+    let n_terms: usize = 1;
+
+    let mut A: Matrix<f64, _, _, _> = Matrix::zeros_generic(Dyn::from_usize(2usize), Dyn::from_usize(n));//::<f64>::zeros((2, n));
+    for i in 0..n {
+        A[(0, i)] = 1.0;
+        for j in 1..n_terms {
+            A[(j, i)] = A[(j - 1, i)] * xs[i].into();
+        }
+    }
+
+    // let mut Z = Array2::<f64>::zeros((n, 1));
+    let mut Z: Matrix<f64, _, _, _> = Matrix::zeros_generic(Dyn::from_usize(n), Dyn::from_usize(1));
+    for i in 0..n {
+        Z[(i, 0)] = 1.0f64 * ys[i].into();
+    }
+
+    let A_t = A.transpose();
+    let A_A_t = (&A) * A_t;
+    if let Some(iA_A_t) = A_A_t.try_inverse() {
+        let iA_A_t_A = iA_A_t * A;
+        let B = iA_A_t_A * (&Z);
+
+        let mut mse: f64 = 0.0;
+        // This seems to be just reading out the final dimension's terms
+        for i in 0..n {
+            terms[0] = B[(0, 0)];
+            let mut y_fit = B[(0, 0)];
+            let mut x_pow: f64 = xs[i].into();
+            for j in 1..n_terms {
+                terms[j] = B[(j, 0)];
+                y_fit += B[(j, 0)] * x_pow;
                 x_pow *= xs[i].into();
             }
             mse += ys[i].into() - y_fit;

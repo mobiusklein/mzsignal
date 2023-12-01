@@ -7,6 +7,7 @@ use std::ops::{Add, Index};
 
 #[cfg(feature = "parallelism")]
 use rayon::prelude::*;
+#[cfg(feature = "parallelism")]
 use std::sync::Mutex;
 
 use cfg_if;

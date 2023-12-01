@@ -47,6 +47,11 @@ for peak in acc.iter() {
 }
 ```
 ## Building
-This library depends upon `ndarray-linalg`, which means it needs a LAPACK implementation
-as a backend for `ndarray-linalg`. These are enabled by passing one of the supported backends
-as a `feature` to `cargo` e.g.:
+This library needs a small amount of linear algebra, so it depends on either `nalgebra` or `ndarray`+`ndarray-linalg`.
+
+If the you wish to use `ndarray-linalg`, it needs a LAPACK implementation, controlled by the following features:
+  - `intel-mkl`
+  - `openblas`
+  - `netlib`
+
+otherwise, the default `nalgebra` backend will be used.
