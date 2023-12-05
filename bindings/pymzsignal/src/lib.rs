@@ -352,7 +352,8 @@ fn py_pick_peaks(mz_array: PyReadonlyArray1<f64>,
             match err {
                 PeakPickerError::IntervalTooSmall => Err(PyException::new_err("Interval is too small")),
                 PeakPickerError::MZIntensityMismatch => Err(PyException::new_err("mz_array and intensity_array must have the same size")),
-                PeakPickerError::Unknown => Err(PyException::new_err("Unknown error"))
+                PeakPickerError::Unknown => Err(PyException::new_err("Unknown error")),
+                PeakPickerError::MZNotSorted => Err(PyException::new_err("mz_array is not sorted"))
             }
         }
     }

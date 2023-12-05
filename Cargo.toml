@@ -51,6 +51,7 @@ rayon = { version = "1.5.1", optional = true }
 plotters = { version = "0.3.4", optional = true}
 mzpeaks = { version="0.8.0" }
 nalgebra = { version = "0.32.3", optional = true }
+thiserror = "1.0.50"
 
 [dev-dependencies]
 rstest = "0.18.2"

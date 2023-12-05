@@ -3,6 +3,9 @@ use std::ops;
 
 use log::{info, debug};
 
+use thiserror::Error;
+
+use num_traits::Float;
 #[cfg(feature = "parallelism")]
 use rayon::prelude::*;
 
@@ -25,6 +28,19 @@ impl Default for PeakFitType {
         PeakFitType::Quadratic
     }
 }
+
+
+pub fn is_increasing<F: Float + PartialOrd>(it: &[F]) -> bool {
+    let (ascending, _) = it.into_iter().fold((true, F::zero()), |(ascending, last_val), val| {
+        if !ascending {
+            (false, last_val)
+        } else {
+            ((last_val <= *val), *val)
+        }
+    });
+    ascending
+}
+
 
 #[derive(Debug, Clone, Default)]
 pub struct PartialPeakFit {
@@ -54,11 +70,16 @@ impl PartialPeakFit {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Error)]
 pub enum PeakPickerError {
+    #[error("Unknown error occurred")]
     Unknown,
+    #[error("The m/z and intensity arrays do not match in length")]
     MZIntensityMismatch,
+    #[error("The peak picking interval is too narrow")]
     IntervalTooSmall,
+    #[error("The m/z array is not sorted")]
+    MZNotSorted
 }
 
 #[derive(Debug, Clone, Default)]
@@ -350,6 +371,9 @@ pub fn pick_peaks(
 ) -> Result<Vec<FittedPeak>, PeakPickerError> {
     let picker = PeakPicker::default();
     let mut acc = Vec::new();
+    if !is_increasing(&mz_array) {
+        return Err(PeakPickerError::MZNotSorted)
+    }
     match picker.discover_peaks(mz_array, intensity_array, &mut acc) {
         Ok(_) => Ok(acc),
         Err(err) => Err(err),
