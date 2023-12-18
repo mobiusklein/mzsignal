@@ -119,6 +119,7 @@ pub enum SavitskyGolayError {
 }
 
 // Adapted from https://github.com/tpict/savgol-rs/
+#[allow(unused)]
 #[derive(Debug, Clone)]
 struct SavitskyGolay<'a, F: Float> {
     data: &'a [F],
@@ -127,6 +128,7 @@ struct SavitskyGolay<'a, F: Float> {
     derivative: usize,
 }
 
+#[allow(unused)]
 fn factorial(n: usize) -> usize {
     match n {
         0 => 1,
@@ -331,6 +333,7 @@ mod nalgebra_impl {
             let x = DVector::from_vec(self.data.to_vec());
             eprintln!("Convolving kernel");
             eprintln!("Coefficients: {coefs:?}");
+            // This seems to be a bottleneck
             let y = x.convolve_full(coefs);
             let padding = (y.len() - x.len()) / 2;
             let y = y.as_slice();
@@ -355,4 +358,5 @@ mod nalgebra_impl {
 }
 
 #[cfg(feature = "nalgebra")]
+#[deprecated = "WIP"]
 pub use nalgebra_impl::savitsky_golay;
