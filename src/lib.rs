@@ -80,6 +80,7 @@ pub mod histogram;
 pub mod peak;
 pub mod peak_picker;
 pub mod peak_statistics;
+pub mod smooth;
 #[cfg(feature="plotting")]
 pub mod plot;
 pub mod reprofile;

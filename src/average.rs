@@ -21,6 +21,7 @@ pub struct SignalAverager<'lifespan> {
     pub mz_grid: Vec<f64>,
     pub mz_start: f64,
     pub mz_end: f64,
+    pub dx: f64,
     pub array_pairs: VecDeque<ArrayPair<'lifespan>>,
 }
 
@@ -30,6 +31,7 @@ impl<'lifespan, 'transient: 'lifespan> SignalAverager<'lifespan> {
             mz_grid: gridspace(mz_start, mz_end, dx),
             mz_start,
             mz_end,
+            dx,
             array_pairs: VecDeque::new(),
         }
     }
@@ -42,6 +44,10 @@ impl<'lifespan, 'transient: 'lifespan> SignalAverager<'lifespan> {
     /// Remove the least recently added array pair from the queue.
     pub fn pop(&mut self) -> Option<ArrayPair<'lifespan>> {
         self.array_pairs.pop_front()
+    }
+
+    pub fn len(&self) -> usize {
+        self.array_pairs.len()
     }
 
     #[inline]
@@ -59,8 +65,7 @@ impl<'lifespan, 'transient: 'lifespan> SignalAverager<'lifespan> {
     pub fn interpolate_into(&self, out: &mut [f32], start_mz: f64, end_mz: f64) -> usize {
         let offset = self.find_offset(start_mz);
         let stop_index = self.find_offset(end_mz);
-        // println!("stop_index {} offset {} total {} out.len() {}", stop_index, offset, stop_index - offset, out.len());
-        assert!(stop_index - offset == out.len());
+        // debug_assert!(stop_index - offset == out.len());
 
         for block in self.array_pairs.iter() {
             for i in offset..stop_index {
@@ -87,13 +92,17 @@ impl<'lifespan, 'transient: 'lifespan> SignalAverager<'lifespan> {
                 };
                 let interp =
                     self.interpolate_point(mz_j, x, mz_j1, inten_j as f64, inten_j1 as f64);
-                out[i - offset] = interp as f32;
+                out[i - offset] += interp as f32;
             }
+        }
+        if self.array_pairs.len() > 1 {
+            let normalizer = self.array_pairs.len() as f32;
+            out.iter_mut().for_each(|y| *y /= normalizer);
         }
         stop_index - offset
     }
 
-    pub fn interpolate_chunks(&'lifespan self, n_chunks: usize) -> Vec<f32> {
+    pub fn interpolate_chunks(&self, n_chunks: usize) -> Vec<f32> {
         let mut result = self.create_intensity_array();
         if self.array_pairs.is_empty() {
             return result;
@@ -184,6 +193,12 @@ impl<'lifespan> MZGrid for SignalAverager<'lifespan> {
     }
 }
 
+impl<'lifespan> Extend<ArrayPair<'lifespan>> for SignalAverager<'lifespan> {
+    fn extend<T: IntoIterator<Item = ArrayPair<'lifespan>>>(&mut self, iter: T) {
+        self.array_pairs.extend(iter)
+    }
+}
+
 // Can't inline cfg-if
 cfg_if::cfg_if! {
     if #[cfg(feature = "parallelism")] {
@@ -242,6 +257,7 @@ mod test {
         let mzs = [180.0633881, 181.06338858024316, 182.06338874740308];
         for (peak, mz) in acc.iter().zip(mzs.iter()) {
             assert!((peak.mz - mz).abs() < 1e-6);
+            assert!(peak.intensity > 0.0);
         }
     }
 

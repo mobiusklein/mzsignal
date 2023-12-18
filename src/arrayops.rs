@@ -125,8 +125,8 @@ impl<'lifespan> ArrayPair<'lifespan> {
             .mz_array
             .binary_search_by(|x| x.partial_cmp(&mz).unwrap())
         {
-            Ok(i) => i,
-            Err(i) => i,
+            Ok(i) => i.min(self.mz_array.len().saturating_sub(1)),
+            Err(i) => i.min(self.mz_array.len().saturating_sub(1)),
         }
     }
 
