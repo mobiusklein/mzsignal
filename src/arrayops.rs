@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 use std::iter::Sum;
-use std::ops::{Add, Index};
+use std::ops::{Add, Index, Range};
 
 use std::convert;
 
@@ -77,7 +77,7 @@ pub trait MZGrid {
 
     fn copy_mz_array(&self) -> Vec<f64> {
         let grid = self.mz_grid();
-        return Vec::from(grid);
+        grid.into()
     }
 }
 
@@ -120,6 +120,7 @@ impl<'lifespan> ArrayPair<'lifespan> {
         }
     }
 
+    /// Find the index nearest to `mz`
     pub fn find(&self, mz: f64) -> usize {
         match self
             .mz_array
@@ -128,6 +129,16 @@ impl<'lifespan> ArrayPair<'lifespan> {
             Ok(i) => i.min(self.mz_array.len().saturating_sub(1)),
             Err(i) => i.min(self.mz_array.len().saturating_sub(1)),
         }
+    }
+
+    /// Select the slice of the m/z and intensity arrays between `low` m/z and `high` m/z
+    /// returning a non-owning [`ArrayPair`]
+    pub fn find_between(&self, low: f64, high: f64) -> ArrayPair<'_> {
+        let i_low = self.find(low);
+        let i_high = self.find(high);
+        let mz_array = &self.mz_array[i_low..i_high];
+        let intensity_array = &self.intensity_array[i_low..i_high];
+        (mz_array, intensity_array).into()
     }
 
     pub fn len(&self) -> usize {
@@ -153,14 +164,14 @@ impl<'lifespan> ArrayPair<'lifespan> {
         )
     }
 
-    pub fn to_owned(&self) -> ArrayPair<'_> {
-        let mz_array = match &self.mz_array {
+    pub fn to_owned(self) -> ArrayPair<'static> {
+        let mz_array = match self.mz_array {
             Cow::Borrowed(b) => Cow::Owned(b.to_vec()),
-            Cow::Owned(b) => Cow::Owned(b.clone()),
+            Cow::Owned(b) => Cow::Owned(b),
         };
-        let intensity_array = match &self.intensity_array {
+        let intensity_array = match self.intensity_array {
             Cow::Borrowed(b) => Cow::Owned(b.to_vec()),
-            Cow::Owned(b) => Cow::Owned(b.clone()),
+            Cow::Owned(b) => Cow::Owned(b),
         };
         ArrayPair::new(mz_array, intensity_array)
     }
