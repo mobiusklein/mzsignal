@@ -1,6 +1,7 @@
 //! Convert picked peaks into a profile spectrum.
 //!
 use std::borrow;
+use std::borrow::Cow;
 use std::cmp;
 use std::iter;
 
@@ -21,7 +22,7 @@ pub enum PeakShape {
 /// A model for predicting the signal shape given a fitted peak as a set
 /// of model parameters
 pub struct PeakShapeModel<'lifespan> {
-    pub peak: borrow::Cow<'lifespan, FittedPeak>,
+    pub peak: Cow<'lifespan, FittedPeak>,
     pub shape: PeakShape,
 }
 
@@ -74,7 +75,7 @@ impl<'lifespan> PeakShapeModel<'lifespan> {
         shape: PeakShape,
     ) -> PeakShapeModel<'lifespan> {
         PeakShapeModel {
-            peak: borrow::Cow::Owned(FittedPeak {
+            peak: Cow::Owned(FittedPeak {
                 mz,
                 intensity,
                 full_width_at_half_max,
@@ -84,13 +85,17 @@ impl<'lifespan> PeakShapeModel<'lifespan> {
         }
     }
 
+
+    /// Create a [`PeakShape::Gaussian`] [`PeakShapeModel`]
     pub fn gaussian(peak: &FittedPeak) -> PeakShapeModel {
         PeakShapeModel {
-            peak: borrow::Cow::Borrowed(peak),
+            peak: Cow::Borrowed(peak),
             shape: PeakShape::Gaussian,
         }
     }
 
+    /// Estimate the intensity of this peak at `mz`, relative to the
+    /// position of the model peak
     pub fn predict(&self, mz: &f64) -> f32 {
         match self.shape {
             PeakShape::Gaussian => {
@@ -103,6 +108,7 @@ impl<'lifespan> PeakShapeModel<'lifespan> {
         }
     }
 
+    /// Generate a theoretical peak shape signal with m/z and intensity arrays
     pub fn shape(&self, dx: f64) -> (Vec<f64>, Vec<f32>) {
         let (start, end) = self.extremes();
         let mz_array = gridspace(start, end, dx);
@@ -110,12 +116,15 @@ impl<'lifespan> PeakShapeModel<'lifespan> {
         (mz_array, intensity_array)
     }
 
+    /// Generate a theoretical peak shape signal with m/z arrays in `mz_array`
+    /// and adds the theoretical intensity to `intensity_array`
     pub fn shape_in(&self, mz_array: &[f64], intensity_array: &mut [f32]) {
         for (i, val) in mz_array.iter().map(|x| self.predict(x)).enumerate() {
             intensity_array[i] += val;
         }
     }
 
+    /// Calculate the area of the peak shape estimated with an m/z spacing of `dx`
     pub fn area(&self, dx: f64) -> f32 {
         let (x, y) = self.shape(dx);
         trapz(&x, &y)
@@ -125,6 +134,7 @@ impl<'lifespan> PeakShapeModel<'lifespan> {
         self.peak.mz
     }
 
+    /// Approximate the lower and upper m/zs at which this peak no longer detectable
     pub fn extremes(&self) -> (f64, f64) {
         (
             self.peak.mz - self.peak.full_width_at_half_max as f64 - 0.02,
@@ -139,7 +149,12 @@ impl<'lifespan> From<&'lifespan FittedPeak> for PeakShapeModel<'lifespan> {
     }
 }
 
+
+/// Convert something into a [`PeakShapeModel`] with a given width parameter
 pub trait AsPeakShapeModel<'a, 'b: 'a> {
+
+    /// Convert something into a [`PeakShapeModel`] with a given width parameter `fwhm`
+    /// and a specific [`PeakShape`]
     fn as_peak_shape_model(self: &'a Self, fwhm: f32, shape: PeakShape) -> PeakShapeModel<'b>;
 }
 
@@ -149,10 +164,16 @@ impl<'a, 'b: 'a, T: CentroidLike> AsPeakShapeModel<'a, 'b> for &T {
     }
 }
 
+
+/// A probabilistic peak shape re-construction spectrum intensity averager over a
+/// shared m/z axis.
 #[derive(Debug, Default, Clone)]
 pub struct PeakSetReprofiler {
+    /// The evenly spaced m/z axis over which peaks are re-estimated
     pub mz_grid: Vec<f64>,
+    /// The lowest m/z in the spectrum. If an input spectrum has lower m/z values, they will be ignored.
     pub mz_start: f64,
+    /// The highest m/z in the spectrum. If an input spectrum has higher m/z values, they will be ignored.
     pub mz_end: f64,
 }
 
@@ -165,9 +186,11 @@ impl<'passing, 'transient: 'passing, 'lifespan: 'transient> PeakSetReprofiler {
         }
     }
 
+    /// Create an array of [`PeakShapeModel`]s from an array of structs that can convert
+    /// into them, using `shape` for the type of peak shape.
     pub fn build_peak_shape_models<T>(
         &self,
-        peaks: &'lifespan Vec<T>,
+        peaks: &'lifespan [T],
         shape: PeakShape,
     ) -> Vec<PeakShapeModel<'lifespan>>
     where
@@ -185,14 +208,15 @@ impl<'passing, 'transient: 'passing, 'lifespan: 'transient> PeakSetReprofiler {
         result
     }
 
+    /// Create a new spectrum from `models` over the shared m/z axis
     pub fn reprofile_from_models(
         &'lifespan self,
         models: Vec<PeakShapeModel<'transient>>,
     ) -> ArrayPair<'lifespan> {
         if models.is_empty() {
             return ArrayPair::new(
-                borrow::Cow::Borrowed(&self.mz_grid()[0..0]),
-                borrow::Cow::Owned(self.create_intensity_array_of_size(0)),
+                Cow::Borrowed(&self.mz_grid()[0..0]),
+                Cow::Owned(self.create_intensity_array_of_size(0)),
             );
         }
         let mz_start = models.first().unwrap().center();
@@ -214,9 +238,12 @@ impl<'passing, 'transient: 'passing, 'lifespan: 'transient> PeakSetReprofiler {
                 &mut result[start_index..end_index],
             )
         }
-        ArrayPair::new(borrow::Cow::Borrowed(&mz_view), borrow::Cow::Owned(result))
+        ArrayPair::new(Cow::Borrowed(&mz_view), Cow::Owned(result))
     }
 
+
+    /// Create a new spectrum from `peaks` after creating [`PeakShapeModel`]s of them
+    /// over the shared m/z axis
     pub fn reprofile<T>(&'lifespan self, peaks: &'lifespan Vec<T>) -> ArrayPair<'lifespan>
     where
         &'lifespan T: Into<PeakShapeModel<'transient>> + 'static,
@@ -225,6 +252,8 @@ impl<'passing, 'transient: 'passing, 'lifespan: 'transient> PeakSetReprofiler {
         self.reprofile_from_models(models)
     }
 
+    /// Create a new spectrum from `peaks` after creating [`PeakShapeModel`]s of them
+    /// over the shared m/z axis using a uniform peak width parameter `fwhm`
     pub fn reprofile_from_centroids<T>(
         &'lifespan self,
         peaks: &'lifespan Vec<T>,

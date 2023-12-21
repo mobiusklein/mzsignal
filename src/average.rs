@@ -1,5 +1,6 @@
-/// Re-bin a single spectrum, or average together multiple spectra using
-/// interpolation.
+//! Re-bin a single spectrum, or average together multiple spectra using
+//! interpolation.
+//!
 use std::borrow::Cow;
 use std::cmp;
 use std::collections::VecDeque;
@@ -16,12 +17,22 @@ use crate::arrayops::{gridspace, ArrayPair, MZGrid};
 use crate::search;
 use num_traits::{Float, ToPrimitive};
 
+/// A linear interpolation spectrum intensity averager over a shared m/z axis.
 #[derive(Debug, Default, Clone)]
 pub struct SignalAverager<'lifespan> {
+    /// The evenly spaced m/z axis over which spectra are averaged.
     pub mz_grid: Vec<f64>,
+    /// The lowest m/z in the spectrum. If an input spectrum has lower m/z values, they will be ignored.
     pub mz_start: f64,
+    /// The highest m/z in the spectrum. If an input spectrum has higher m/z values, they will be ignored.
     pub mz_end: f64,
+    /// The spacing between m/z values in `mz_grid`. This value should be chosen relative to the sharpness
+    /// of the peak shape of the mass analyzer used, but the smaller it is, the more computationally intensive
+    /// the averaging process is, and the more memory it consumes.
     pub dx: f64,
+    /// The current set of spectra to be averaged together. This uses a deque because the usecase of
+    /// pushing spectra into an averaging window while removing them from the other side fits with the
+    /// way one might average spectra over time.
     pub array_pairs: VecDeque<ArrayPair<'lifespan>>,
 }
 
@@ -50,6 +61,15 @@ impl<'a, 'b: 'a> SignalAverager<'a> {
         self.array_pairs.len()
     }
 
+    /// Linear interpolation between two control points to find the intensity
+    /// at a third point between them.
+    ///
+    /// # Arguments
+    /// - `mz_j` - The first control point's m/z
+    /// - `mz_x` - The interpolated m/z
+    /// - `mz_j1` - The second control point's m/z
+    /// - `inten_j` - The first control point's intensity
+    /// - `inten_j1` - The second control point's intensity
     #[inline]
     pub fn interpolate_point(
         &self,
@@ -62,6 +82,8 @@ impl<'a, 'b: 'a> SignalAverager<'a> {
         ((inten_j * (mz_j1 - mz_x)) + (inten_j1 * (mz_x - mz_j))) / (mz_j1 - mz_j)
     }
 
+    /// A linear interpolation across all spectra between `start_mz` and `end_mz`, with
+    /// their intensities written into `out`.
     pub fn interpolate_into(&self, out: &mut [f32], start_mz: f64, end_mz: f64) -> usize {
         let offset = self.find_offset(start_mz);
         let stop_index = self.find_offset(end_mz);
@@ -129,7 +151,8 @@ impl<'a, 'b: 'a> SignalAverager<'a> {
     }
 
     #[cfg(feature = "parallelism")]
-    pub fn interpolate_chunks_parallel_locked(&'a self, n_chunks: usize) -> Vec<f32> {
+    #[allow(unused)]
+    pub(crate) fn interpolate_chunks_parallel_locked(&'a self, n_chunks: usize) -> Vec<f32> {
         let result = self.create_intensity_array();
         if self.array_pairs.is_empty() {
             return result;
@@ -158,7 +181,8 @@ impl<'a, 'b: 'a> SignalAverager<'a> {
     }
 
     #[cfg(feature = "parallelism")]
-    pub fn interpolate_chunks_parallel(&'a self, n_chunks: usize) -> Vec<f32> {
+    #[allow(unused)]
+    pub(crate) fn interpolate_chunks_parallel(&'a self, n_chunks: usize) -> Vec<f32> {
         let mut result = self.create_intensity_array();
         if self.array_pairs.is_empty() {
             return result;
@@ -180,6 +204,7 @@ impl<'a, 'b: 'a> SignalAverager<'a> {
         result
     }
 
+    /// Allocate a new intensity array, [`interpolate_into`](SignalAverager::interpolate_into) it, and return it.
     pub fn interpolate(&'a self) -> Vec<f32> {
         let mut result = self.create_intensity_array();
         self.interpolate_into(&mut result, self.mz_start, self.mz_end);

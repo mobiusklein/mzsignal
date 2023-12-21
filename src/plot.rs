@@ -8,8 +8,8 @@ use plotters::coord::ranged1d::{
     AsRangedCoord, DefaultFormatting, KeyPointHint, NoDefaultFormatting, Ranged, ValueFormatter,
 };
 use plotters::coord::types::{RangedCoordf32, RangedCoordf64};
-use plotters::prelude::*;
 pub use plotters::prelude::RED;
+use plotters::prelude::*;
 
 use mzpeaks::{CoordinateLike, IntensityMeasurement, MZ};
 
@@ -62,19 +62,28 @@ impl Ranged for SciNotRangedCoordf32 {
     }
 }
 
+impl From<Range<f32>> for SciNotRangedCoordf32 {
+    fn from(value: Range<f32>) -> Self {
+        SciNotRangedCoordf32 {
+            coord: RangedCoordf32::from(value),
+        }
+    }
+}
+
 impl ValueFormatter<f32> for SciNotRangedCoordf32 {
     fn format(value: &f32) -> String {
         plotters::data::float::FloatPrettyPrinter {
             allow_scientific: true,
-            min_decimal: 0,
-            max_decimal: 3,
+            min_decimal: 1,
+            max_decimal: 4,
         }
         .print(*value as f64)
     }
 }
 
-pub type CoordinateSpace =
-    Cartesian2d<plotters::coord::types::RangedCoordf64, SciNotRangedCoordf32>;
+pub type IntensityCoord = SciNotRangedCoordf32;
+
+pub type CoordinateSpace = Cartesian2d<plotters::coord::types::RangedCoordf64, IntensityCoord>;
 
 macro_rules! error_t {
     ($t:ty) => {
@@ -128,7 +137,10 @@ impl<'a> SpectrumSeries<'a> {
         );
 
         match chart.draw_series(series) {
-            Ok(_) => Ok(()),
+            Ok(a) => {
+                a.label(&self.name);
+                Ok(())
+            }
             Err(err) => Err(Box::new(err)),
         }
     }
@@ -139,17 +151,17 @@ impl<'a> SpectrumSeries<'a> {
         (xmin, xmax, ymin, ymax)
     }
 
-    pub fn color(&mut self, color: plotters::style::RGBAColor) -> &mut Self {
+    pub fn color(mut self, color: plotters::style::RGBAColor) -> Self {
         self.color = Some(color);
         self
     }
 
-    pub fn name(&mut self, name: String) -> &mut Self {
+    pub fn name(mut self, name: String) -> Self {
         self.name = name;
         self
     }
 
-    pub fn downsample(&mut self, spacing: f64) -> &mut Self {
+    pub fn downsample(mut self, spacing: f64) -> Self {
         self.downsample = spacing;
         self
     }
@@ -208,6 +220,7 @@ pub struct SpectrumPlot<'lifespan, 'a, 'b, B: DrawingBackend> {
     pub chart: ChartBuilder<'a, 'b, B>,
     pub series: Vec<SpectrumSeries<'lifespan>>,
     pub xlim: Option<(f64, f64)>,
+    pub label_font_size: Option<u32>,
 }
 
 impl<'lifespan, 'a, 'b, B: DrawingBackend> SpectrumPlot<'lifespan, 'a, 'b, B> {
@@ -216,6 +229,7 @@ impl<'lifespan, 'a, 'b, B: DrawingBackend> SpectrumPlot<'lifespan, 'a, 'b, B> {
             chart,
             series: Vec::new(),
             xlim: None,
+            label_font_size: None,
         }
     }
 
@@ -229,7 +243,7 @@ impl<'lifespan, 'a, 'b, B: DrawingBackend> SpectrumPlot<'lifespan, 'a, 'b, B> {
         self
     }
 
-    pub fn make_coordinate_ranges(&self) -> (RangedCoordf64, SciNotRangedCoordf32) {
+    pub fn make_coordinate_ranges(&self) -> (RangedCoordf64, IntensityCoord) {
         let mut xmin = f64::INFINITY;
         let mut xmax = 0f64;
         let mut ymax = 0f32;
@@ -245,9 +259,7 @@ impl<'lifespan, 'a, 'b, B: DrawingBackend> SpectrumPlot<'lifespan, 'a, 'b, B> {
             xmax = xlim.1;
         }
         let xrange = RangedCoordf64::from(xmin..xmax);
-        let yrange = SciNotRangedCoordf32 {
-            coord: RangedCoordf32::from(0.0..ymax),
-        };
+        let yrange = IntensityCoord::from(0.0..ymax);
         (xrange, yrange)
     }
 
@@ -263,8 +275,12 @@ impl<'lifespan, 'a, 'b, B: DrawingBackend> SpectrumPlot<'lifespan, 'a, 'b, B> {
         let mut mesh = chart.configure_mesh();
         mesh.disable_mesh();
         mesh.x_desc("m/z");
-        mesh.axis_desc_style(("sans-serif", 16).into_font());
+        mesh.axis_desc_style(
+            ("sans-serif", self.label_font_size.unwrap_or_else(|| 24)).into_font(),
+        );
+        mesh.x_label_style(("sans-serif", self.label_font_size.unwrap_or_else(|| 16)).into_font());
         mesh.y_desc("Intensity");
+        mesh.y_label_style(("sans-serif", self.label_font_size.unwrap_or_else(|| 16)).into_font());
         mesh.draw()?;
 
         for series in self.series.iter() {
@@ -377,9 +393,7 @@ pub fn draw_on_png(
     let (_ymin, ymax) = arrayops::minmax(intensity_array);
 
     let xrange = RangedCoordf64::from(xmin..xmax);
-    let yrange = SciNotRangedCoordf32 {
-        coord: RangedCoordf32::from(0.0..ymax),
-    };
+    let yrange = IntensityCoord::from(0.0..ymax);
 
     root.fill(&WHITE)?;
     let mut chart = ChartBuilder::on(&root)
@@ -428,9 +442,7 @@ pub fn draw_on_svg(
     let (_ymin, ymax) = arrayops::minmax(intensity_array);
 
     let xrange = RangedCoordf64::from(xmin..xmax);
-    let yrange = SciNotRangedCoordf32 {
-        coord: RangedCoordf32::from(0.0..ymax),
-    };
+    let yrange = IntensityCoord::from(0.0..ymax);
 
     root.fill(&WHITE)?;
     let mut chart = ChartBuilder::on(&root)
@@ -534,16 +546,19 @@ mod test {
         let peaks = pick_peaks(&X, &yhat).unwrap();
         let iterator = peaks.iter();
 
-        let arrays = reprofile(iterator, 0.001);
         let mut chart = SVGBuilder::default();
+
+        let arrays = reprofile(iterator, 0.001);
+        let continuous_ser = SpectrumSeries::from(&arrays).downsample(0.0025);
         let mut ser = SpectrumSeries::from(peaks.iter());
-        ser.color(RED.mix(1.0));
+        ser = ser.color(RED.mix(1.0));
+
         chart
             .path("test/0.svg")
-            .size(1028, 512)
-            .add_series(SpectrumSeries::from(&arrays))
+            .size(1028, 512 + 2u32.pow(6))
+            .add_series(continuous_ser)
             .add_series(ser);
-        chart.xlim(179.0, 181.0);
+        // chart.xlim(179.0, 183.0);
         chart.draw()?;
         Ok(())
     }

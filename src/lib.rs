@@ -7,14 +7,14 @@
 //! criteria that can be manipulated to control which fits are reported, see its
 //! documentation for more details.
 //!
-//! When one spectrum is insufficient, averaging the signal from multiple spectra
-//! together can be better. The [`average`](crate::average) sub-module includes components
+//! When one spectrum is too noisy to accurately assign peaks, averaging the signal from multiple spectra
+//! together can be better. The [`average`] submodule includes components
 //! for merging together multiple profile spectra.
 //!
-//! The [`denoise`](crate::denoise) sub-module includes an algorithm for local background
+//! The [`denoise`] submodule includes an algorithm for local background
 //! noise removal, reducing the intensity of a region according to its noisiest window.
 //!
-//! The [`reprofile`](crate::reprofile) sub-module provides an algorithm to convert
+//! The [`reprofile`] submodule provides an algorithm to convert
 //! a centroid peak back into a profile spectrum, using either fitted or assumed peak
 //! shape parameters.
 //!
@@ -58,8 +58,8 @@
 //! spectrum, creating a new array of different size if appropriate. The intensity array is
 //! almost always re-allocated to fit the new m/z array shape.
 //!
-//! When possible, the data structures in [`average`](crate::average),
-//! [`SignalAverager`](crate::average::SignalAverager), and [`reprofile`](crate::reprofile),
+//! When possible, the data structures in [`average`],
+//! [`SignalAverager`](crate::average::SignalAverager), and [`reprofile`],
 //! [`PeakSetReprofiler`](crate::reprofile::PeakSetReprofiler) will own their high density
 //! m/z arrays and can be re-used from spectrum to spectrum to avoid repeatedly allocating that
 //! large array, and leave it to be borrowed again later. The high level functions in these modules
@@ -69,9 +69,15 @@
 //! will be used for any given computation.
 //!
 //! ## Building
-//! This library depends upon `ndarray-linalg`, which means it needs a LAPACK implementation
-//! as a backend for `ndarray-linalg`. These are enabled by passing one of the supported backends
-//! as a `feature` to `cargo` e.g.:
+//! This library needs a small amount of linear algebra, so it depends on either `nalgebra` or `ndarray`+`ndarray-linalg`.
+//!
+//! If the you wish to use `ndarray-linalg`, it needs a LAPACK implementation, controlled by the following features:
+//!   - `intel-mkl`
+//!   - `openblas`
+//!   - `netlib`
+//!
+//! otherwise, the default `nalgebra` backend will be used.
+
 #![allow(unused_imports)]
 pub mod arrayops;
 pub mod average;

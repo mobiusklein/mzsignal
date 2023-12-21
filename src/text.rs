@@ -1,3 +1,5 @@
+//! Helpers for loading test data
+
 use std::fs;
 use std::io;
 use std::io::prelude::*;
@@ -5,7 +7,7 @@ use std::path;
 
 use crate::arrayops::ArrayPair;
 
-/// A helper function to write an [ArrayPair] to a file on disk as plain text
+/// A helper function to write an [`ArrayPair`] to a file on disk as plain text
 /// The written format is a tab-separated file denoting an m/z intensity pair,
 /// with one pair per line.
 /// See [arrays_to_writer]
@@ -16,7 +18,7 @@ pub fn arrays_to_file<P: AsRef<path::Path>>(arrays: ArrayPair<'_>, path: P) -> i
 }
 
 
-/// A helper function to write an [ArrayPair] to a [Writer] as plain text
+/// A helper function to write an [`ArrayPair`] to a [`Write`] as plain text
 /// The written format is a tab-separated file denoting an m/z intensity pair,
 /// with one pair per line.
 pub fn arrays_to_writer<W: io::Write>(arrays: ArrayPair<'_>, writer: &mut W) -> io::Result<()> {
@@ -29,7 +31,7 @@ pub fn arrays_to_writer<W: io::Write>(arrays: ArrayPair<'_>, writer: &mut W) -> 
 }
 
 
-/// A helper function to read an [ArrayPair] from a [Reader].
+/// A helper function to read an [`ArrayPair`] from a [`Read`] type.
 /// The expected format is a tab-separated file denoting an m/z intensity pair,
 /// with one pair per line.
 pub fn arrays_from_reader<'a, R: io::Read>(source: R) -> io::Result<ArrayPair<'a>> {
@@ -52,7 +54,7 @@ pub fn arrays_from_reader<'a, R: io::Read>(source: R) -> io::Result<ArrayPair<'a
 }
 
 
-/// A helper function to read an [ArrayPair] from a file on disk.
+/// A helper function to read an [`ArrayPair`] from a file on disk.
 /// The expected format is a tab-separated file denoting an m/z intensity pair,
 /// with one pair per line.
 /// See [arrays_from_reader]

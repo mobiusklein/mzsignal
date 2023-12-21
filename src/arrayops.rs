@@ -1,3 +1,5 @@
+//! Helper functions and data structures for manipulating array data
+
 use std::borrow::Cow;
 use std::iter::Sum;
 use std::ops::{Add, Index, Range};
@@ -6,6 +8,8 @@ use std::convert;
 
 use num_traits::{AsPrimitive, Float, ToPrimitive, Zero};
 
+
+/// Create an evenly spaced grid from `start` to `end`, with `step` between points
 pub fn gridspace<T: Float + ToPrimitive>(start: T, end: T, step: T) -> Vec<T> {
     let distance = end - start;
     let steps = (distance / step).to_usize().unwrap();
@@ -16,6 +20,8 @@ pub fn gridspace<T: Float + ToPrimitive>(start: T, end: T, step: T) -> Vec<T> {
     result
 }
 
+
+/// Given an unsorted slice, find its minimum and maximum values
 pub fn minmax<T: Float>(values: &[T]) -> (T, T) {
     let mut max = -T::infinity();
     let mut min = T::infinity();
@@ -31,6 +37,8 @@ pub fn minmax<T: Float>(values: &[T]) -> (T, T) {
     (min, max)
 }
 
+
+/// Trapezoid integration
 pub fn trapz<
     A: Float + Clone + AsPrimitive<B> + 'static,
     B: Float + Clone + AsPrimitive<A> + 'static + Sum,
