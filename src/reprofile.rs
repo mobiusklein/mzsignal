@@ -246,7 +246,7 @@ impl<'passing, 'transient: 'passing, 'lifespan: 'transient> PeakSetReprofiler {
     /// over the shared m/z axis
     pub fn reprofile<T>(&'lifespan self, peaks: &'lifespan Vec<T>) -> ArrayPair<'lifespan>
     where
-        &'lifespan T: Into<PeakShapeModel<'transient>> + 'static,
+        &'lifespan T: Into<PeakShapeModel<'transient>>,
     {
         let models = peaks.iter().map(|p| p.into()).collect();
         self.reprofile_from_models(models)
@@ -260,7 +260,7 @@ impl<'passing, 'transient: 'passing, 'lifespan: 'transient> PeakSetReprofiler {
         fwhm: f32,
     ) -> ArrayPair<'lifespan>
     where
-        T: AsPeakShapeModel<'passing, 'passing> + 'static,
+        T: AsPeakShapeModel<'passing, 'passing>,
     {
         let mut models = Vec::with_capacity(peaks.len());
         for p in peaks.iter() {
