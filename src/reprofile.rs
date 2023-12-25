@@ -211,7 +211,7 @@ impl<'passing, 'transient: 'passing, 'lifespan: 'transient> PeakSetReprofiler {
     /// Create a new spectrum from `models` over the shared m/z axis
     pub fn reprofile_from_models(
         &'lifespan self,
-        models: Vec<PeakShapeModel<'transient>>,
+        models: &[PeakShapeModel<'transient>],
     ) -> ArrayPair<'lifespan> {
         if models.is_empty() {
             return ArrayPair::new(
@@ -244,19 +244,16 @@ impl<'passing, 'transient: 'passing, 'lifespan: 'transient> PeakSetReprofiler {
 
     /// Create a new spectrum from `peaks` after creating [`PeakShapeModel`]s of them
     /// over the shared m/z axis
-    pub fn reprofile<T>(&'lifespan self, peaks: &'lifespan Vec<T>) -> ArrayPair<'lifespan>
-    where
-        &'lifespan T: Into<PeakShapeModel<'transient>>,
-    {
-        let models = peaks.iter().map(|p| p.into()).collect();
-        self.reprofile_from_models(models)
+    pub fn reprofile<T: Into<PeakShapeModel<'transient>> + Clone>(&'lifespan self, peaks: &'lifespan [T]) -> ArrayPair<'lifespan> {
+        let models: Vec<_> = peaks.iter().cloned().map(|p| p.into()).collect();
+        self.reprofile_from_models(&models)
     }
 
     /// Create a new spectrum from `peaks` after creating [`PeakShapeModel`]s of them
     /// over the shared m/z axis using a uniform peak width parameter `fwhm`
     pub fn reprofile_from_centroids<T>(
         &'lifespan self,
-        peaks: &'lifespan Vec<T>,
+        peaks: &'lifespan [T],
         fwhm: f32,
     ) -> ArrayPair<'lifespan>
     where
@@ -267,7 +264,7 @@ impl<'passing, 'transient: 'passing, 'lifespan: 'transient> PeakSetReprofiler {
             let pm = p.as_peak_shape_model(fwhm, PeakShape::Gaussian);
             models.push(pm);
         }
-        self.reprofile_from_models(models)
+        self.reprofile_from_models(&models)
     }
 }
 
@@ -287,7 +284,7 @@ where
     let mz_start = models.first().unwrap().extremes().0 - 1.0;
     let mz_end = models.last().unwrap().extremes().1 + 1.0;
     let reprofiler = PeakSetReprofiler::new(mz_start, mz_end, dx);
-    let arrays = reprofiler.reprofile_from_models(models);
+    let arrays = reprofiler.reprofile_from_models(&models);
     let result = ArrayPair::from((
         reprofiler.copy_mz_array(),
         arrays.intensity_array.into_owned(),
