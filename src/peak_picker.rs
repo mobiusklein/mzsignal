@@ -222,13 +222,7 @@ impl PeakPicker {
                             signal_to_noise = current_intensity;
                         }
 
-                        let peak = FittedPeak {
-                            mz: fitted_mz,
-                            intensity: current_intensity,
-                            index: index as u32,
-                            full_width_at_half_max: fwhm,
-                            signal_to_noise,
-                        };
+                        let peak = FittedPeak::new(fitted_mz, current_intensity, index as u32, fwhm, signal_to_noise);
                         // eprintln!("Storing peak with mz {:0.3}/{:0.3} with FWHM {:0.3}", fitted_mz, current_mz, fwhm);
                         peak_accumulator.push(peak);
                         partial_fit_state.reset();

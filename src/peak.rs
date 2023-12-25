@@ -3,9 +3,9 @@ use std::fmt;
 use std::hash;
 
 use mzpeaks;
-use mzpeaks::CentroidPeak;
 use mzpeaks::peak::MZPoint;
 use mzpeaks::prelude::*;
+use mzpeaks::CentroidPeak;
 use mzpeaks::{
     CentroidLike, CoordinateLike, IndexType, IndexedCoordinate, IntensityMeasurement, MZ,
 };
@@ -24,6 +24,24 @@ pub struct FittedPeak {
     pub signal_to_noise: f32,
     /// A symmetric average peak shape parameter
     pub full_width_at_half_max: f32,
+}
+
+impl FittedPeak {
+    pub fn new(
+        mz: f64,
+        intensity: f32,
+        index: u32,
+        signal_to_noise: f32,
+        full_width_at_half_max: f32,
+    ) -> Self {
+        Self {
+            mz,
+            intensity,
+            index,
+            signal_to_noise,
+            full_width_at_half_max,
+        }
+    }
 }
 
 // Implement the CentroidLike interface
