@@ -4,6 +4,7 @@ use std::ops;
 use std::slice;
 
 use num_traits::Float;
+use thiserror::Error;
 
 use crate::histogram::Histogram;
 use crate::search;
@@ -270,7 +271,7 @@ fn group_windows_by_width<'lifespan>(
     result
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Error)]
 pub enum DenoisingError {}
 
 pub struct DenoisingArrayPair<'lifespan> {
