@@ -85,6 +85,11 @@ impl<'lifespan> PeakShapeModel<'lifespan> {
         }
     }
 
+    pub fn new(peak: Cow<'lifespan, FittedPeak>, shape: PeakShape) -> Self {
+        Self {
+            peak, shape
+        }
+    }
 
     /// Create a [`PeakShape::Gaussian`] [`PeakShapeModel`]
     pub fn gaussian(peak: &FittedPeak) -> PeakShapeModel {
@@ -149,6 +154,14 @@ impl<'lifespan> From<&'lifespan FittedPeak> for PeakShapeModel<'lifespan> {
     }
 }
 
+impl From<FittedPeak> for PeakShapeModel<'static> {
+    fn from(value: FittedPeak) -> Self {
+        PeakShapeModel {
+            peak: Cow::Owned(value),
+            shape: PeakShape::Gaussian
+        }
+    }
+}
 
 /// Convert something into a [`PeakShapeModel`] with a given width parameter
 pub trait AsPeakShapeModel<'a, 'b: 'a> {
