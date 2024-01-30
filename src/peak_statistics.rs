@@ -404,24 +404,10 @@ pub fn quadratic_fit(mz_array: &[f64], intensity_array: &[f32], index: usize) ->
 
 #[cfg(test)]
 mod test {
-    // use super::*;
-    // use crate::test_data::{read_1col, read_cols};
-    // use std::io;
-    // use std::io::prelude::*;
-    // use std::fs;
+    use super::*;
+    use crate::test_data::{read_1col, read_cols};
+    use std::io;
+    use std::io::prelude::*;
+    use std::fs;
 
-    // #[test]
-    // fn test_snr() -> io::Result<()> {
-    //     let coords = read_1col::<usize>("./test/peak_coords.txt")?;
-    //     let cols = read_cols::<f64, 2>("./test/0.txt")?;
-    //     let xs = &cols[0];
-    //     let ys = &cols[1];
-
-    //     for coord in coords {
-    //         let snr = approximate_signal_to_noise(ys[coord], &ys, coord);
-    //         println!("{}\t{}\t{}", coord, snr, xs[coord]);
-    //     }
-
-    //     Ok(())
-    // }
 }

@@ -549,7 +549,7 @@ mod test {
         let mut chart = SVGBuilder::default();
 
         let arrays = reprofile(iterator, 0.001);
-        let continuous_ser = SpectrumSeries::from(&arrays).downsample(0.0025);
+        let continuous_ser = SpectrumSeries::from(&arrays);//.downsample(0.0025);
         let mut ser = SpectrumSeries::from(peaks.iter());
         ser = ser.color(RED.mix(1.0));
 
@@ -558,7 +558,7 @@ mod test {
             .size(1028, 512 + 2u32.pow(6))
             .add_series(continuous_ser)
             .add_series(ser);
-        // chart.xlim(179.0, 183.0);
+        chart.xlim(179.0, 183.0);
         chart.draw()?;
         Ok(())
     }

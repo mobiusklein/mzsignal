@@ -86,9 +86,7 @@ impl<'lifespan> PeakShapeModel<'lifespan> {
     }
 
     pub fn new(peak: Cow<'lifespan, FittedPeak>, shape: PeakShape) -> Self {
-        Self {
-            peak, shape
-        }
+        Self { peak, shape }
     }
 
     /// Create a [`PeakShape::Gaussian`] [`PeakShapeModel`]
@@ -158,14 +156,13 @@ impl From<FittedPeak> for PeakShapeModel<'static> {
     fn from(value: FittedPeak) -> Self {
         PeakShapeModel {
             peak: Cow::Owned(value),
-            shape: PeakShape::Gaussian
+            shape: PeakShape::Gaussian,
         }
     }
 }
 
 /// Convert something into a [`PeakShapeModel`] with a given width parameter
 pub trait AsPeakShapeModel<'a, 'b: 'a> {
-
     /// Convert something into a [`PeakShapeModel`] with a given width parameter `fwhm`
     /// and a specific [`PeakShape`]
     fn as_peak_shape_model(self: &'a Self, fwhm: f32, shape: PeakShape) -> PeakShapeModel<'b>;
@@ -176,7 +173,6 @@ impl<'a, 'b: 'a, T: CentroidLike> AsPeakShapeModel<'a, 'b> for &T {
         PeakShapeModel::from_centroid(self.coordinate(), self.intensity(), fwhm, shape)
     }
 }
-
 
 /// A probabilistic peak shape re-construction spectrum intensity averager over a
 /// shared m/z axis.
@@ -254,10 +250,12 @@ impl<'passing, 'transient: 'passing, 'lifespan: 'transient> PeakSetReprofiler {
         ArrayPair::new(Cow::Borrowed(&mz_view), Cow::Owned(result))
     }
 
-
     /// Create a new spectrum from `peaks` after creating [`PeakShapeModel`]s of them
     /// over the shared m/z axis
-    pub fn reprofile<T: Into<PeakShapeModel<'transient>> + Clone>(&'lifespan self, peaks: &'lifespan [T]) -> ArrayPair<'lifespan> {
+    pub fn reprofile<T: Into<PeakShapeModel<'transient>> + Clone>(
+        &'lifespan self,
+        peaks: &'lifespan [T],
+    ) -> ArrayPair<'lifespan> {
         let models: Vec<_> = peaks.iter().cloned().map(|p| p.into()).collect();
         self.reprofile_from_models(&models)
     }
@@ -314,4 +312,41 @@ impl MZGrid for PeakSetReprofiler {
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::arrayops::ArrayPair;
+    use crate::peak_picker::pick_peaks;
+    use crate::reprofile::reprofile;
+    use crate::test_data::{NOISE, X, Y};
+
+    #[test]
+    fn test_builder() -> () {
+        let yhat: Vec<f32> = Y
+            .iter()
+            .zip(NOISE.iter())
+            .map(|(y, e)| y * 50.0 + e * 20.0)
+            .collect();
+        let mut peaks = pick_peaks(&X, &yhat).unwrap();
+        peaks.sort_by(|a, b| a.mz.total_cmp(&b.mz));
+        assert_eq!(peaks.len(), 37);
+        let iterator = peaks.iter();
+        let pair = reprofile(iterator, 0.01);
+        eprintln!("{} {}", pair.min_mz, pair.max_mz);
+        let peaks2 = pick_peaks(&pair.mz_array, &pair.intensity_array).unwrap();
+        assert_eq!(peaks2.len(), 31);
+        let p1 = peaks
+            .iter()
+            .max_by(|a, b| a.intensity.total_cmp(&b.intensity))
+            .unwrap();
+        let p2 = peaks2
+            .iter()
+            .max_by(|a, b| a.intensity.total_cmp(&b.intensity))
+            .unwrap();
+
+        assert!(
+            (p1.mz - p2.mz).abs() < 1e-3,
+            "{} - {} = {}",
+            p1.mz,
+            p2.mz,
+            p1.mz - p2.mz
+        )
+    }
 }
