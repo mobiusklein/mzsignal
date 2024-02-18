@@ -968,7 +968,7 @@ checksum = "370e92ba8351b66d7b75dec26601753d5e8c678031cc4031fc48fade7d87c106"
 
 [[package]]
 name = "mzsignal"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "cfg-if",
  "log",
