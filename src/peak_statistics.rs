@@ -92,10 +92,10 @@ pub fn approximate_signal_to_noise<Y: Float + FromPrimitive>(
 pub fn curve_regression<T: Float + Into<f64> + Debug, U: Float + Into<f64> + Debug>(xs: &[T], ys: &[U], n: usize, terms: &mut [f64; 2]) -> f64 {
     cfg_if! {
         if #[cfg(feature = "ndarray")] {
-            return curve_regression_ndarray(xs, ys, n, terms);
+            curve_regression_ndarray(xs, ys, n, terms)
         }
         else if #[cfg(feature = "nalgebra")] {
-            return curve_regression_nalgebra(xs, ys, n, terms);
+            curve_regression_nalgebra(xs, ys, n, terms)
         }
     }
 }

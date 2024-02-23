@@ -962,9 +962,9 @@ dependencies = [
 
 [[package]]
 name = "mzpeaks"
-version = "0.10.0"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "370e92ba8351b66d7b75dec26601753d5e8c678031cc4031fc48fade7d87c106"
+checksum = "7889b09ecc49ba7fb3efc2db7f3e09fb9e33dcc1e371a80d3e5f539a206094a4"
 
 [[package]]
 name = "mzsignal"

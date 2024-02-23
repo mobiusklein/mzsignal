@@ -61,6 +61,10 @@ impl<'a, 'b: 'a> SignalAverager<'a> {
         self.array_pairs.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.array_pairs.is_empty()
+    }
+
     /// Linear interpolation between two control points to find the intensity
     /// at a third point between them.
     ///
@@ -199,7 +203,7 @@ impl<'a, 'b: 'a> SignalAverager<'a> {
                 let start_mz = mz_chunk.first().unwrap();
                 // The + 1e-6 is just a gentle push to get interpolate_into to roll over to the last position in the chunk
                 let end_mz = mz_chunk.last().unwrap() + 1e-6;
-                self.interpolate_into(&mut intensity_chunk, *start_mz, end_mz);
+                self.interpolate_into(intensity_chunk, *start_mz, end_mz);
             });
         result
     }

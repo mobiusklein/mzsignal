@@ -57,13 +57,13 @@ impl<'a> Eq for PeakShapeModel<'a> {}
 
 impl<'lifespan> PartialOrd<PeakShapeModel<'lifespan>> for PeakShapeModel<'lifespan> {
     fn partial_cmp(&self, other: &PeakShapeModel<'lifespan>) -> Option<cmp::Ordering> {
-        return self.peak.mz.partial_cmp(&other.peak.mz);
+        Some(self.cmp(other))
     }
 }
 
 impl<'lifespan> Ord for PeakShapeModel<'lifespan> {
     fn cmp(&self, other: &Self) -> cmp::Ordering {
-        self.partial_cmp(other).unwrap()
+        self.peak.mz.partial_cmp(&other.peak.mz).unwrap()
     }
 }
 
@@ -165,11 +165,11 @@ impl From<FittedPeak> for PeakShapeModel<'static> {
 pub trait AsPeakShapeModel<'a, 'b: 'a> {
     /// Convert something into a [`PeakShapeModel`] with a given width parameter `fwhm`
     /// and a specific [`PeakShape`]
-    fn as_peak_shape_model(self: &'a Self, fwhm: f32, shape: PeakShape) -> PeakShapeModel<'b>;
+    fn as_peak_shape_model(&'b self, fwhm: f32, shape: PeakShape) -> PeakShapeModel<'a>;
 }
 
 impl<'a, 'b: 'a, T: CentroidLike> AsPeakShapeModel<'a, 'b> for &T {
-    fn as_peak_shape_model(self: &'a Self, fwhm: f32, shape: PeakShape) -> PeakShapeModel<'b> {
+    fn as_peak_shape_model(&'b self, fwhm: f32, shape: PeakShape) -> PeakShapeModel<'a> {
         PeakShapeModel::from_centroid(self.coordinate(), self.intensity(), fwhm, shape)
     }
 }
@@ -247,7 +247,7 @@ impl<'passing, 'transient: 'passing, 'lifespan: 'transient> PeakSetReprofiler {
                 &mut result[start_index..end_index],
             )
         }
-        ArrayPair::new(Cow::Borrowed(&mz_view), Cow::Owned(result))
+        ArrayPair::new(Cow::Borrowed(mz_view), Cow::Owned(result))
     }
 
     /// Create a new spectrum from `peaks` after creating [`PeakShapeModel`]s of them
@@ -296,11 +296,10 @@ where
     let mz_end = models.last().unwrap().extremes().1 + 1.0;
     let reprofiler = PeakSetReprofiler::new(mz_start, mz_end, dx);
     let arrays = reprofiler.reprofile_from_models(&models);
-    let result = ArrayPair::from((
+    ArrayPair::from((
         reprofiler.copy_mz_array(),
         arrays.intensity_array.into_owned(),
-    ));
-    result
+    ))
 }
 
 impl MZGrid for PeakSetReprofiler {

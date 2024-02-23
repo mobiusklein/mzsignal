@@ -1,6 +1,9 @@
+//! An implementation of smoothing filters and transformations
+//!
 use std::collections::VecDeque;
 use std::fmt::Debug;
-use std::ops::{Add, AddAssign, SubAssign};
+use std::marker::PhantomData;
+use std::ops::{Add, AddAssign, Sub, SubAssign};
 
 use num_traits;
 use num_traits::{Float, FromPrimitive};
@@ -36,11 +39,18 @@ impl<F: Float + AddAssign, const N: usize> RingBuffer<F, N> {
     }
 }
 
+/// Moving average over a window of size `N`
 #[derive(Debug, Clone)]
-struct MovingAverage<F: Float + AddAssign + SubAssign, const N: usize> {
+pub struct MovingAverage<F: Float + AddAssign + SubAssign, const N: usize> {
     buffer: RingBuffer<F, N>,
     running_sum: F,
     divisor: F,
+}
+
+impl<F: Float + AddAssign + SubAssign, const N: usize> Default for MovingAverage<F, N> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl<F: Float + AddAssign + SubAssign, const N: usize> MovingAverage<F, N> {
@@ -54,6 +64,13 @@ impl<F: Float + AddAssign + SubAssign, const N: usize> MovingAverage<F, N> {
         }
     }
 
+    /// Reset the internal state to an empty buffer and 0 mean
+    pub fn reset(&mut self) {
+        self.buffer = RingBuffer::new();
+        self.running_sum = F::zero();
+    }
+
+    /// Add `value` to the ring buffer, ejecting the last value
     pub fn add(&mut self, value: F) {
         self.running_sum += value;
         if let Some(last_value) = self.buffer.add(value) {
@@ -61,16 +78,22 @@ impl<F: Float + AddAssign + SubAssign, const N: usize> MovingAverage<F, N> {
         };
     }
 
+    /// Get the current average value
     pub fn average(&self) -> F {
         self.running_sum / self.divisor
     }
 
+
+    /// Average the signal in `data` into `destination` with window size `N`
     pub fn average_into(data: &[F], destination: &mut [F]) {
         let state = Self::new();
-        let it = state.average_over(data.into_iter().copied());
+        let it = state.average_over(data.iter().copied());
         it.zip(destination.iter_mut()).for_each(|(a, d)| *d = a);
     }
 
+    /// Return an iterator that successively computes the *next* averaged item, managing
+    /// the cycling of the ring buffer.
+    #[must_use]
     pub fn average_over<I: Iterator<Item = F>>(self, source: I) -> MovingAverageIter<F, N, I> {
         MovingAverageIter {
             state: self,
@@ -79,7 +102,9 @@ impl<F: Float + AddAssign + SubAssign, const N: usize> MovingAverage<F, N> {
     }
 }
 
-struct MovingAverageIter<F: Float + AddAssign + SubAssign, const N: usize, I: Iterator<Item = F>> {
+
+/// An iterator used internally by [`MovingAverage::average_into`] and exposed by [`MovingAverage::average_over`]
+pub struct MovingAverageIter<F: Float + AddAssign + SubAssign, const N: usize, I: Iterator<Item = F>> {
     state: MovingAverage<F, N>,
     source: I,
 }
@@ -90,13 +115,15 @@ impl<F: Float + AddAssign + SubAssign, const N: usize, I: Iterator<Item = F>> It
     type Item = F;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.source.next().and_then(|x| {
+        self.source.next().map(|x| {
             self.state.add(x);
-            Some(self.state.average())
+            self.state.average()
         })
     }
 }
 
+/// Compute a moving average over a window of size `N` on either side of each point using
+/// a compile time-known window size.
 pub fn moving_average<F: Float + AddAssign + SubAssign, const N: usize>(
     xdata: &[F],
     xout: &mut [F],
@@ -104,6 +131,37 @@ pub fn moving_average<F: Float + AddAssign + SubAssign, const N: usize>(
     MovingAverage::<F, N>::average_into(xdata, xout)
 }
 
+
+/// Compute a moving average over a window of size `N` on either side of each point.
+/// This uses dynamic dispatch to a fixed window size implementation. This maxes out
+/// at 20 currently.
+pub fn moving_average_dyn<F: Float + AddAssign + SubAssign>(xdata: &[F], xout: &mut [F], size: usize) {
+    match size {
+        1 => moving_average::<F, 1>(xdata, xout),
+        2 => moving_average::<F, 1>(xdata, xout),
+        3 => moving_average::<F, 3>(xdata, xout),
+        4 => moving_average::<F, 4>(xdata, xout),
+        5 => moving_average::<F, 5>(xdata, xout),
+        6 => moving_average::<F, 6>(xdata, xout),
+        7 => moving_average::<F, 7>(xdata, xout),
+        8 => moving_average::<F, 8>(xdata, xout),
+        9 => moving_average::<F, 9>(xdata, xout),
+        10 => moving_average::<F, 10>(xdata, xout),
+        11 => moving_average::<F, 11>(xdata, xout),
+        12 => moving_average::<F, 12>(xdata, xout),
+        13 => moving_average::<F, 13>(xdata, xout),
+        14 => moving_average::<F, 14>(xdata, xout),
+        15 => moving_average::<F, 15>(xdata, xout),
+        16 => moving_average::<F, 16>(xdata, xout),
+        17 => moving_average::<F, 17>(xdata, xout),
+        18 => moving_average::<F, 18>(xdata, xout),
+        19 => moving_average::<F, 19>(xdata, xout),
+        20 => moving_average::<F, 20>(xdata, xout),
+        _ => moving_average::<F, 20>(xdata, xout)
+    }
+}
+
+/// All the ways a Savitsky-Golay filter can go wrong
 #[derive(Debug, Clone, Copy, Error)]
 pub enum SavitskyGolayError {
     #[error("The window length must be an odd number, received {0}")]
@@ -118,17 +176,19 @@ pub enum SavitskyGolayError {
     FailedToSolveCoefficients(&'static str),
 }
 
-// Adapted from https://github.com/tpict/savgol-rs/
+
+/// An opaque implementation of a non-negative [Savitsky-Golay](https://en.wikipedia.org/wiki/Savitzky%E2%80%93Golay_filter) filter.
+/// The implementation details depend upon which linear algebra backend is enabled.
+/// Implementation details were adapted from `<https://github.com/tpict/savgol-rs/>`
 #[allow(unused)]
 #[derive(Debug, Clone)]
-struct SavitskyGolay<'a, F: Float> {
-    data: &'a [F],
-    window_length: usize,
-    poly_order: usize,
-    derivative: usize,
+pub struct SavitskyGolay<F: Float> {
+    pub window_length: usize,
+    pub poly_order: usize,
+    pub derivative: usize,
+    coefs: Vec<F>,
 }
 
-#[allow(unused)]
 fn factorial(n: usize) -> usize {
     match n {
         0 => 1,
@@ -137,10 +197,14 @@ fn factorial(n: usize) -> usize {
     }
 }
 
+
+/// A basic opaque polynomial for Savitsky-Golay
 #[derive(Debug, Clone)]
 pub struct Polynomial<F: Float + AddAssign + SubAssign> {
-    coefficients: Vec<F>,
-    order: usize,
+    /// The coefficients of each polynomial
+    pub coefficients: Vec<F>,
+    /// The number of polynomial terms
+    pub order: usize,
 }
 
 impl<F: Float + AddAssign + SubAssign> Polynomial<F> {
@@ -194,34 +258,26 @@ mod nalgebra_impl {
 
     use super::*;
 
-    impl<'a, F: Float + Debug + 'static + nalgebra::ComplexField + nalgebra::RealField>
-        SavitskyGolay<'a, F>
-    {
+    impl<F: Float + Debug + 'static + nalgebra::ComplexField + nalgebra::RealField> SavitskyGolay<F> {
         fn new(
-            data: &'a [F],
             window_length: usize,
             poly_order: usize,
             derivative: usize,
         ) -> Result<Self, SavitskyGolayError> {
-            let inst = Self {
-                data,
+            let mut inst = Self {
                 window_length,
                 poly_order,
                 derivative,
+                coefs: Vec::new(),
             };
             inst.validate()?;
+            inst.coefs = inst.estimate_coefficients()?;
             Ok(inst)
         }
 
         fn validate(&self) -> Result<(), SavitskyGolayError> {
-            let n = self.data.len();
             if self.window_length % 2 == 0 {
                 Err(SavitskyGolayError::WindowLengthNotOdd(self.window_length))
-            } else if self.window_length > n {
-                Err(SavitskyGolayError::WindowLengthTooLong(
-                    self.window_length,
-                    n,
-                ))
             } else if self.poly_order >= self.window_length {
                 Err(SavitskyGolayError::PolynomialOrderTooLarge(
                     self.poly_order,
@@ -232,7 +288,7 @@ mod nalgebra_impl {
             }
         }
 
-        fn estimate_coefficients(&self) -> Result<DVector<F>, SavitskyGolayError> {
+        fn estimate_coefficients(&self) -> Result<Vec<F>, SavitskyGolayError> {
             let half_length = self.window_length / 2;
             let rem = self.window_length % 2;
 
@@ -241,7 +297,7 @@ mod nalgebra_impl {
                 _ => F::from(half_length).unwrap(),
             };
             if self.derivative > self.poly_order {
-                Ok(DVector::from_element(self.window_length, F::zero()))
+                Ok(DVector::from_element(self.window_length, F::zero()).into_iter().copied().collect())
             } else {
                 // Construct a Vandermond matrix
                 let x = DVector::from_fn(self.window_length, |i, _| pos - F::from(i).unwrap());
@@ -260,7 +316,7 @@ mod nalgebra_impl {
                     Ok(val) => val,
                     Err(err) => return Err(SavitskyGolayError::FailedToSolveCoefficients(err)),
                 };
-                Ok(beta)
+                Ok(beta.into_iter().copied().collect())
             }
         }
 
@@ -281,7 +337,7 @@ mod nalgebra_impl {
                 });
             });
 
-            let beta = DVector::from_row_slice(&y);
+            let beta = DVector::from_row_slice(y);
             let decomp = nalgebra::linalg::SVD::new(system, true, true);
 
             // Solve system of equations for polynomial coefficients
@@ -306,44 +362,56 @@ mod nalgebra_impl {
                 .map(|i| F::from(i).unwrap())
                 .collect();
 
-            let poly_coefs = Polynomial::new(self.polyfit(&x_edge, &y_edge)?, self.poly_order);
-            eprintln!("Initial polynomial {poly_coefs:?}");
+            let poly_coefs = Polynomial::new(self.polyfit(x_edge, &y_edge)?, self.poly_order);
             let poly_coefs = poly_coefs.derivative_to_zero(self.derivative);
-            eprintln!("Derived polynomial {poly_coefs:?}");
             let i: Vec<_> = (0..interp_stop - interp_start)
                 .map(|i| F::from(interp_start - window_start + i).unwrap())
                 .collect();
-            eprintln!("Evaluating polynomial");
             let values = poly_coefs.eval(&i);
             y.splice(interp_start..interp_stop, values);
             Ok(())
         }
 
-        fn fit_edges(&self, x: &DVector<F>, y: &mut Vec<F>) -> Result<(), SavitskyGolayError>{
-            eprintln!("Fitting forward edge");
-            self.fit_edge(x, 0, self.window_length, self.half_length(), self.poly_order, y)?;
+        fn fit_edges(&self, x: &DVector<F>, y: &mut Vec<F>) -> Result<(), SavitskyGolayError> {
+            self.fit_edge(
+                x,
+                0,
+                self.window_length,
+                self.half_length(),
+                self.poly_order,
+                y,
+            )?;
             let n = x.len();
-            eprintln!("Fitting backward edge");
             self.fit_edge(x, n - self.window_length, n, n - self.half_length(), n, y)
         }
 
-        fn smooth(&self) -> Result<Vec<F>, SavitskyGolayError> {
-            eprintln!("Estimating coefficients");
-            let coefs = self.estimate_coefficients()?;
-            let x = DVector::from_vec(self.data.to_vec());
-            eprintln!("Convolving kernel");
-            eprintln!("Coefficients: {coefs:?}");
+        pub fn smooth(&self, data: &[F]) -> Result<Vec<F>, SavitskyGolayError> {
+            let n = data.len();
+            if self.window_length > n {
+                return Err(SavitskyGolayError::WindowLengthTooLong(
+                    self.window_length,
+                    n,
+                ));
+            }
+            let coefs = DVector::from_row_slice(&self.coefs);
+            let x = DVector::from_row_slice(data);
             // This seems to be a bottleneck
             let y = x.convolve_full(coefs);
             let padding = (y.len() - x.len()) / 2;
             let y = y.as_slice();
             let mut y = y[padding..y.len().saturating_sub(padding)].to_vec();
-            eprintln!("Fitting edges");
             self.fit_edges(&x, &mut y)?;
+            let zero = F::zero();
+            y.iter_mut().for_each(|y| {
+                if *y < zero {
+                    *y = zero;
+                }
+            });
             Ok(y)
         }
     }
 
+    /// A wrapper around [`SavitskyGolay`] for the [`nalgebra`] backend.
     pub fn savitsky_golay<
         F: Float + Debug + 'static + nalgebra::ComplexField + nalgebra::RealField,
     >(
@@ -352,11 +420,54 @@ mod nalgebra_impl {
         poly_order: usize,
         derivative: usize,
     ) -> Result<Vec<F>, SavitskyGolayError> {
-        let state = SavitskyGolay::new(data, window_length, poly_order, derivative)?;
-        state.smooth()
+        let state = SavitskyGolay::new(window_length, poly_order, derivative)?;
+        state.smooth(data)
     }
 }
 
 #[cfg(feature = "nalgebra")]
-#[deprecated = "WIP"]
 pub use nalgebra_impl::savitsky_golay;
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::test_data::{NOISE, X, Y};
+
+    use std::{
+        fs,
+        io::{self, Write},
+    };
+
+    #[test]
+    fn test_savgol() -> io::Result<()> {
+        let actual_y: Vec<_> = Y
+            .iter()
+            .zip(NOISE.iter())
+            .map(|(y, o)| *y * 1000.0 + *o)
+            .collect();
+        let smoothed = savitsky_golay(&actual_y, 5, 3, 0).unwrap();
+        let diff: f32 = actual_y
+            .iter()
+            .zip(smoothed.iter())
+            .map(|(y, y2)| (*y - *y2).abs())
+            .sum::<f32>()
+            / smoothed.len() as f32;
+        eprintln!("Difference {}", diff);
+
+        assert!(
+            (diff - 1761.9003).abs() < 1e-3,
+            "Difference {diff} was {} (too large)",
+            (diff - 1761.9003).abs()
+        );
+
+        // let mut rawfh = fs::File::create("raw.txt")?;
+        // actual_y.iter().for_each(|y| {
+        //     rawfh.write(format!("{}\n", *y).as_bytes()).unwrap();
+        // });
+        // let mut rawfh = fs::File::create("savgol.txt")?;
+        // smoothed.iter().for_each(|y| {
+        //     rawfh.write(format!("{}\n", *y).as_bytes()).unwrap();
+        // });
+        Ok(())
+    }
+}

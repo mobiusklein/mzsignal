@@ -17,21 +17,15 @@ use crate::peak_statistics::{
 use crate::search::{nearest, nearest_binary, nearest_left, nearest_right};
 use std::collections::btree_map::{BTreeMap, Entry};
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy)]
 pub enum PeakFitType {
+    #[default]
     Quadratic,
     Apex,
 }
 
-impl Default for PeakFitType {
-    fn default() -> PeakFitType {
-        PeakFitType::Quadratic
-    }
-}
-
-
 pub fn is_increasing<F: Float + PartialOrd>(it: &[F]) -> bool {
-    let (ascending, _) = it.into_iter().fold((true, F::zero()), |(ascending, last_val), val| {
+    let (ascending, _) = it.iter().fold((true, F::zero()), |(ascending, last_val), val| {
         if !ascending {
             (false, last_val)
         } else {
@@ -115,10 +109,7 @@ impl PeakPicker {
     }
 
     fn is_prominent(&self, prev: f32, cur: f32, next: f32) -> bool {
-        if (prev <= cur) && (cur >= next) && (cur > 0.0) {
-            return true
-        }
-        return false
+        (prev <= cur) && (cur >= next) && (cur > 0.0)
     }
 
     #[allow(unused_variables)]
@@ -365,7 +356,7 @@ pub fn pick_peaks(
 ) -> Result<Vec<FittedPeak>, PeakPickerError> {
     let picker = PeakPicker::default();
     let mut acc = Vec::new();
-    if !is_increasing(&mz_array) {
+    if !is_increasing(mz_array) {
         return Err(PeakPickerError::MZNotSorted)
     }
     match picker.discover_peaks(mz_array, intensity_array, &mut acc) {
