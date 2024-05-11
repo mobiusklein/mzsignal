@@ -87,6 +87,8 @@ pub mod peak;
 pub mod peak_picker;
 pub mod peak_statistics;
 pub mod smooth;
+pub mod feature_mapping;
+
 #[cfg(feature="plotting")]
 pub mod plot;
 pub mod reprofile;
@@ -99,3 +101,4 @@ mod test_data;
 pub use crate::arrayops::ArrayPair;
 pub use crate::peak::FittedPeak;
 pub use crate::peak_picker::{pick_peaks, PeakFitType, PeakPicker, PeakPickerError};
+pub use crate::feature_mapping::{PeakMapBuilderType, LCMSMapBuilder, IMMSMapBuilder, PeakMapBuilder};

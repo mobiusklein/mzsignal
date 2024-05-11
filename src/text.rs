@@ -62,3 +62,69 @@ pub fn arrays_from_file<'a, P: AsRef<path::Path>>(path: P) -> io::Result<ArrayPa
     let reader = fs::File::open(path)?;
     arrays_from_reader(reader)
 }
+
+
+pub fn arrays_over_time_from_reader<'a, R: io::Read>(source: R) -> io::Result<Vec<(f64, ArrayPair<'a>)>> {
+    let reader = io::BufReader::new(source);
+    let mut mz_array: Vec<f64> = Vec::new();
+    let mut intensity_array: Vec<f32> = Vec::new();
+    let mut time: f64 = f64::NEG_INFINITY;
+
+    let mut acc = Vec::new();
+
+    for line in reader.lines() {
+        let line = line.unwrap();
+        let pref = line.trim();
+        let chunks: Vec<&str> = pref.split('\t').collect();
+        let mz = chunks[0].parse::<f64>().expect("Expected number for m/z");
+        let inten = chunks[1]
+                .parse::<f32>()
+                .expect("Expected number for intensity");
+        let t = chunks[2].parse::<f64>().expect("Expected number for time");
+
+        if t != time {
+            if !mz_array.is_empty() {
+                acc.push((
+                    time,
+                    ArrayPair::from((mz_array, intensity_array))
+                ));
+                mz_array = Vec::new();
+                intensity_array = Vec::new();
+            }
+            time = t;
+        }
+        mz_array.push(mz);
+        intensity_array.push(inten);
+    }
+
+    if !mz_array.is_empty() {
+        acc.push((
+            time,
+            ArrayPair::from((mz_array, intensity_array))
+        ));
+    }
+    Ok(acc)
+}
+
+
+/// A helper function to read an [`ArrayPair`] from a file on disk.
+/// The expected format is a tab-separated file denoting an m/z intensity pair,
+/// with one pair per line.
+pub fn arrays_over_time_from_file<'a, P: AsRef<path::Path>>(path: P) -> io::Result<Vec<(f64, ArrayPair<'a>)>> {
+    let reader = fs::File::open(path)?;
+    arrays_over_time_from_reader(reader)
+}
+
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+
+    #[test]
+    fn read_arrays_over_time() -> io::Result<()> {
+        let time_arrays = arrays_over_time_from_file("./test/data/peaks_over_time.txt")?;
+        assert_eq!(187, time_arrays.len());
+        Ok(())
+    }
+}
