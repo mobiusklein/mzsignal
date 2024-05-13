@@ -11,7 +11,6 @@ use mzpeaks::{
     prelude::*,
     CentroidPeak, IonMobility, Mass, Time, Tolerance, MZ,
 };
-use nalgebra::ComplexField;
 
 use crate::search::nearest;
 
@@ -79,6 +78,177 @@ impl MapLink {
         self.intensity_weight * (self.mass_error.powi(4) as f32)
     }
 }
+
+/// Merge [`mzpeaks::feature::FeatureLike`] entities which are within the same mass dimension
+/// error tolerance and within a certain time of one-another by constructing a graph, extracting
+/// connected components, and stitch them together.
+pub trait FeatureGraphBuilder<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone> {
+
+    /// Build the feature graph, where `features` are nodes and edges connect features which
+    /// are close as given by `mass_error_tolerance`, with gap between start/end or end/start
+    /// <= `maximum_gap_size` time units (given by `T`).
+    ///
+    /// The default implementation only filters on the [`mzpeaks::CoordinateLike::coordinate`]
+    /// w.r.t. `D`. If additional constraints are needed, provide a specific implementation.
+    fn build_graph(
+        &self,
+        features: &FeatureMap<D, T, F>,
+        mass_error_tolerance: Tolerance,
+        maximum_gap_size: f64,
+    ) -> Vec<FeatureNode> {
+        let features: FeatureMap<D, T, _> = features
+            .iter()
+            .enumerate()
+            .map(|(i, f)| IndexedFeature::new(f, i))
+            .collect();
+
+        let mut nodes = Vec::with_capacity(features.len());
+
+        for f in features.iter() {
+            if f.is_empty() {
+                continue;
+            }
+            let candidates = features.all_features_for(f.coordinate(), mass_error_tolerance);
+            let mut edges = Vec::new();
+            let start_time = f.start_time().unwrap();
+            let end_time = f.end_time().unwrap();
+            for c in candidates {
+                if f.index == c.index || c.is_empty() {
+                    continue;
+                } else {
+                    let c_start = c.start_time().unwrap();
+                    let c_end = c.end_time().unwrap();
+                    if (start_time - c_end).abs() < maximum_gap_size
+                        || (end_time - c_start).abs() < maximum_gap_size
+                        || f.as_range().overlaps(&c.as_range())
+                    {
+                        edges.push(FeatureLink::new(f.index, c.index));
+                    }
+                }
+            }
+            let node = FeatureNode::new(f.index, edges);
+            nodes.push(node);
+        }
+
+        nodes
+    }
+
+    fn find_connected_components(&self, graph: Vec<FeatureNode>) -> Vec<Vec<usize>> {
+        let mut tarjan = TarjanStronglyConnectedComponents::new(graph);
+        tarjan.solve();
+        tarjan.connected_components
+    }
+
+    fn merge_components(
+        &self,
+        features: &FeatureMap<D, T, F>,
+        connected_components: Vec<Vec<usize>>,
+    ) -> FeatureMap<D, T, F> {
+        let mut merged_nodes = Vec::new();
+        for component_indices in connected_components {
+            if component_indices.is_empty() {
+                continue;
+            }
+            let mut features_of: Vec<_> = component_indices
+                .into_iter()
+                .map(|i| features.get_item(i))
+                .collect();
+            features_of.sort_by(|a, b| a.start_time().unwrap().total_cmp(&b.start_time().unwrap()));
+            let mut acc = (*features_of[0]).clone();
+            for f in &features_of[1..] {
+                for (x, y, z) in f.iter() {
+                    acc.push_raw(*x, *y, *z);
+                }
+            }
+            merged_nodes.push(acc);
+        }
+
+        FeatureMap::new(merged_nodes)
+    }
+
+    fn bridge_feature_gaps(
+        &self,
+        features: &FeatureMap<D, T, F>,
+        mass_error_tolerance: Tolerance,
+        maximum_gap_size: f64,
+    ) -> FeatureMap<D, T, F> {
+        let graph = self.build_graph(features, mass_error_tolerance, maximum_gap_size);
+        let components = self.find_connected_components(graph);
+        self.merge_components(features, components)
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct FeatureMerger<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone> {
+    _d: PhantomData<D>,
+    _t: PhantomData<T>,
+    _f: PhantomData<F>,
+}
+
+impl<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone> FeatureGraphBuilder<D, T, F>
+    for FeatureMerger<D, T, F>
+{
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct ChargeAwareFeatureMerger<
+    D,
+    T,
+    F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone + KnownCharge,
+> {
+    _d: PhantomData<D>,
+    _t: PhantomData<T>,
+    _f: PhantomData<F>,
+}
+
+impl<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone + KnownCharge>
+    FeatureGraphBuilder<D, T, F> for ChargeAwareFeatureMerger<D, T, F>
+{
+    fn build_graph(
+        &self,
+        features: &FeatureMap<D, T, F>,
+        mass_error_tolerance: Tolerance,
+        maximum_gap_size: f64,
+    ) -> Vec<FeatureNode> {
+        let features: FeatureMap<D, T, _> = features
+            .iter()
+            .enumerate()
+            .map(|(i, f)| IndexedFeature::new(f, i))
+            .collect();
+
+        let mut nodes = Vec::with_capacity(features.len());
+
+        for f in features.iter() {
+            if f.is_empty() {
+                continue;
+            }
+            let z = f.feature.charge();
+            let candidates = features.all_features_for(f.coordinate(), mass_error_tolerance);
+            let mut edges = Vec::new();
+            let start_time = f.start_time().unwrap();
+            let end_time = f.end_time().unwrap();
+            for c in candidates {
+                if f.index == c.index || c.is_empty() || c.feature.charge() != z {
+                    continue;
+                } else {
+                    let c_start = c.start_time().unwrap();
+                    let c_end = c.end_time().unwrap();
+                    if (start_time - c_end).abs() < maximum_gap_size
+                        || (end_time - c_start).abs() < maximum_gap_size
+                        || f.as_range().overlaps(&c.as_range())
+                    {
+                        edges.push(FeatureLink::new(f.index, c.index));
+                    }
+                }
+            }
+            let node = FeatureNode::new(f.index, edges);
+            nodes.push(node);
+        }
+
+        nodes
+    }
+}
+
 
 #[derive(Default, Debug, Clone)]
 pub struct PeakMapState<C: IndexedCoordinate<D> + IntensityMeasurement, D> {
@@ -771,188 +941,6 @@ mod index_impl {
 }
 
 use index_impl::IndexedFeature;
-
-pub trait FeatureGraphBuilder<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone> {
-    fn build_graph(
-        &self,
-        features: &FeatureMap<D, T, F>,
-        mass_error_tolerance: Tolerance,
-        maximum_gap_size: f64,
-    ) -> Vec<FeatureNode> {
-        let features: FeatureMap<D, T, _> = features
-            .iter()
-            .enumerate()
-            .map(|(i, f)| IndexedFeature::new(f, i))
-            .collect();
-
-        let mut nodes = Vec::with_capacity(features.len());
-
-        for f in features.iter() {
-            if f.is_empty() {
-                continue;
-            }
-            let candidates = features.all_features_for(f.coordinate(), mass_error_tolerance);
-            let mut edges = Vec::new();
-            let start_time = f.start_time().unwrap();
-            let end_time = f.end_time().unwrap();
-            for c in candidates {
-                if f.index == c.index || c.is_empty() {
-                    continue;
-                } else {
-                    let c_start = c.start_time().unwrap();
-                    let c_end = c.end_time().unwrap();
-                    if (start_time - c_end).abs() < maximum_gap_size
-                        || (end_time - c_start).abs() < maximum_gap_size
-                        || f.as_range().overlaps(&c.as_range())
-                    {
-                        edges.push(FeatureLink::new(f.index, c.index));
-                    }
-                }
-            }
-            let node = FeatureNode::new(f.index, edges);
-            nodes.push(node);
-        }
-
-        nodes
-    }
-
-    fn find_connected_components(&self, graph: Vec<FeatureNode>) -> Vec<Vec<usize>> {
-        let mut tarjan = TarjanStronglyConnectedComponents::new(graph);
-        tarjan.solve();
-        tarjan.connected_components
-    }
-
-    fn merge_components(
-        &self,
-        features: &FeatureMap<D, T, F>,
-        connected_components: Vec<Vec<usize>>,
-    ) -> FeatureMap<D, T, F> {
-        let mut merged_nodes = Vec::new();
-        for component_indices in connected_components {
-            if component_indices.is_empty() {
-                continue;
-            }
-            let mut features_of: Vec<_> = component_indices
-                .into_iter()
-                .map(|i| features.get_item(i))
-                .collect();
-            features_of.sort_by(|a, b| a.start_time().unwrap().total_cmp(&b.start_time().unwrap()));
-            let mut acc = (*features_of[0]).clone();
-            for f in &features_of[1..] {
-                for (x, y, z) in f.iter() {
-                    acc.push_raw(*x, *y, *z);
-                }
-            }
-            merged_nodes.push(acc);
-        }
-
-        FeatureMap::new(merged_nodes)
-    }
-
-    fn bridge_feature_gaps(
-        &self,
-        features: &FeatureMap<D, T, F>,
-        mass_error_tolerance: Tolerance,
-        maximum_gap_size: f64,
-    ) -> FeatureMap<D, T, F> {
-        let graph = self.build_graph(features, mass_error_tolerance, maximum_gap_size);
-        let components = self.find_connected_components(graph);
-        self.merge_components(features, components)
-    }
-}
-
-#[derive(Debug, Default, Clone)]
-pub struct FeatureMerger<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone> {
-    _d: PhantomData<D>,
-    _t: PhantomData<T>,
-    _f: PhantomData<F>,
-}
-
-impl<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone> FeatureMerger<D, T, F> {
-    pub fn new() -> Self {
-        Self {
-            _d: PhantomData,
-            _t: PhantomData,
-            _f: PhantomData,
-        }
-    }
-}
-
-impl<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone> FeatureGraphBuilder<D, T, F>
-    for FeatureMerger<D, T, F>
-{
-}
-
-#[derive(Debug, Default, Clone)]
-pub struct ChargeAwareFeatureMerger<
-    D,
-    T,
-    F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone + KnownCharge,
-> {
-    _d: PhantomData<D>,
-    _t: PhantomData<T>,
-    _f: PhantomData<F>,
-}
-
-impl<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone + KnownCharge>
-    ChargeAwareFeatureMerger<D, T, F>
-{
-    pub fn new() -> Self {
-        Self {
-            _d: PhantomData,
-            _t: PhantomData,
-            _f: PhantomData,
-        }
-    }
-}
-
-impl<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone + KnownCharge>
-    FeatureGraphBuilder<D, T, F> for ChargeAwareFeatureMerger<D, T, F>
-{
-    fn build_graph(
-        &self,
-        features: &FeatureMap<D, T, F>,
-        mass_error_tolerance: Tolerance,
-        maximum_gap_size: f64,
-    ) -> Vec<FeatureNode> {
-        let features: FeatureMap<D, T, _> = features
-            .iter()
-            .enumerate()
-            .map(|(i, f)| IndexedFeature::new(f, i))
-            .collect();
-
-        let mut nodes = Vec::with_capacity(features.len());
-
-        for f in features.iter() {
-            if f.is_empty() {
-                continue;
-            }
-            let z = f.feature.charge();
-            let candidates = features.all_features_for(f.coordinate(), mass_error_tolerance);
-            let mut edges = Vec::new();
-            let start_time = f.start_time().unwrap();
-            let end_time = f.end_time().unwrap();
-            for c in candidates {
-                if f.index == c.index || c.is_empty() || c.feature.charge() == z {
-                    continue;
-                } else {
-                    let c_start = c.start_time().unwrap();
-                    let c_end = c.end_time().unwrap();
-                    if (start_time - c_end).abs() < maximum_gap_size
-                        || (end_time - c_start).abs() < maximum_gap_size
-                        || f.as_range().overlaps(&c.as_range())
-                    {
-                        edges.push(FeatureLink::new(f.index, c.index));
-                    }
-                }
-            }
-            let node = FeatureNode::new(f.index, edges);
-            nodes.push(node);
-        }
-
-        nodes
-    }
-}
 
 #[cfg(test)]
 mod test {
