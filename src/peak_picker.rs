@@ -1,7 +1,7 @@
 use std::cmp;
 use std::ops;
 
-use log::{info, debug};
+use log::{debug, info};
 
 use thiserror::Error;
 
@@ -17,37 +17,53 @@ use crate::peak_statistics::{
 use crate::search::{nearest, nearest_binary, nearest_left, nearest_right};
 use std::collections::btree_map::{BTreeMap, Entry};
 
+/// The type of peak picking to perform, defining the expected
+/// peak shape fitting function.
 #[derive(Debug, Default, Clone, Copy)]
 pub enum PeakFitType {
+    /// Fit a gaussian peak shape using a closed form quadratic function to
+    /// determine the true peak centroid from the digitized signal.
     #[default]
     Quadratic,
+    /// A simple fit which assumes that the highest point is the
+    /// centroid. If the digitized signal doesn't directly strike
+    /// the apex, there will be a small amount of error.
     Apex,
 }
 
+/// Check if the value in `it` are monotonically ascending or flat
 pub fn is_increasing<F: Float + PartialOrd>(it: &[F]) -> bool {
-    let (ascending, _) = it.iter().fold((true, F::zero()), |(ascending, last_val), val| {
-        if !ascending {
-            (false, last_val)
-        } else {
-            ((last_val <= *val), *val)
-        }
-    });
+    let (ascending, _) = it
+        .iter()
+        .fold((true, F::zero()), |(ascending, last_val), val| {
+            if !ascending {
+                (false, last_val)
+            } else {
+                ((last_val <= *val), *val)
+            }
+        });
     ascending
 }
 
-
+/// Hold a partial peak shape fit for [`PeakPicker`]
 #[derive(Debug, Clone, Default)]
 pub struct PartialPeakFit {
+    /// Whether the fit has been initialized for the current peak or not
     pub set: bool,
+
+    /// The signal to noise ratio for the current peak fit
     pub signal_to_noise: f32,
 
-    /// Shape holders
+    /// The left width at half max
     pub left_width: f32,
+    /// The right width at half max
     pub right_width: f32,
+    /// The average width at half max
     pub full_width_at_half_max: f32,
 }
 
 impl PartialPeakFit {
+    /// Reset the peak fit, invalidating all attributes and setting [`PartialPeakFit::set`] to `false`
     pub fn reset(&mut self) {
         self.set = false;
         self.left_width = -1.0;
@@ -56,6 +72,7 @@ impl PartialPeakFit {
         self.signal_to_noise = -1.0;
     }
 
+    /// Copy the shape information from a [`WidthFit`]
     pub fn update(&mut self, fit: &WidthFit) {
         self.full_width_at_half_max = fit.full_width_at_half_max as f32;
         self.left_width = fit.left_width as f32;
@@ -64,6 +81,7 @@ impl PartialPeakFit {
     }
 }
 
+/// All the ways peak picking can fail
 #[derive(Debug, Clone, Error)]
 pub enum PeakPickerError {
     #[error("Unknown error occurred")]
@@ -73,20 +91,89 @@ pub enum PeakPickerError {
     #[error("The peak picking interval is too narrow")]
     IntervalTooSmall,
     #[error("The m/z array is not sorted")]
-    MZNotSorted
+    MZNotSorted,
 }
 
+/// A peak picker
 #[derive(Debug, Clone, Default)]
 pub struct PeakPicker {
     pub background_intensity: f32,
     pub intensity_threshold: f32,
     pub signal_to_noise_threshold: f32,
-
-    pub partial_fit_state: PartialPeakFit,
     pub fit_type: PeakFitType,
 }
 
+/// A builder for configuring [`PeakPicker`]
+#[derive(Debug, Clone, Default)]
+pub struct PeakPickerBuilder {
+    background_intensity: f32,
+    intensity_threshold: f32,
+    signal_to_noise_threshold: f32,
+    fit_type: PeakFitType,
+}
+
+impl PeakPickerBuilder {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn background_intensity(&mut self, background_intensity: f32) -> &mut Self {
+        self.background_intensity = background_intensity;
+        self
+    }
+
+    pub fn intensity_threshold(&mut self, intensity_threshold: f32) -> &mut Self {
+        self.intensity_threshold = intensity_threshold;
+        self
+    }
+
+    pub fn signal_to_noise_threshold(&mut self, signal_to_noise_threshold: f32) -> &mut Self {
+        self.signal_to_noise_threshold = signal_to_noise_threshold;
+        self
+    }
+
+    pub fn fit_type(&mut self, fit_type: PeakFitType) -> &mut Self {
+        self.fit_type = fit_type;
+        self
+    }
+
+    pub fn build(self) -> PeakPicker {
+        PeakPicker::new(
+            self.background_intensity,
+            self.intensity_threshold,
+            self.signal_to_noise_threshold,
+            self.fit_type,
+        )
+    }
+}
+
+impl From<PeakPickerBuilder> for PeakPicker {
+    fn from(value: PeakPickerBuilder) -> Self {
+        value.build()
+    }
+}
+
 impl PeakPicker {
+    /// Create a new peak picker
+    pub fn new(
+        background_intensity: f32,
+        intensity_threshold: f32,
+        signal_to_noise_threshold: f32,
+        fit_type: PeakFitType,
+    ) -> Self {
+        Self {
+            background_intensity,
+            intensity_threshold,
+            signal_to_noise_threshold,
+            fit_type,
+        }
+    }
+
+    /// Pick peaks from `mz_array` and `intensity_array`, pushing new peaks into `peak_accumulator`.
+    ///
+    /// Returns the number of peaks picked if successful.
+    ///
+    /// This is a thin wrapper around [`PeakPicker::discover_peaks_in_interval`].
     pub fn discover_peaks(
         &self,
         mz_array: &[f64],
@@ -112,6 +199,13 @@ impl PeakPicker {
         (prev <= cur) && (cur >= next) && (cur > 0.0)
     }
 
+    /// Fit a peak at position `index` in `mz_array` and `intensity_array`.
+    ///
+    /// `index` is assumed to be the most intense point along the putative
+    /// peak, the "apex", thus for [`PeakFitType::Apex`], this function is
+    /// simply `mz_array[index]`.
+    ///
+    /// Returns the estimated m/z of the "true" peak.
     #[allow(unused_variables)]
     pub fn fit_peak(
         &self,
@@ -126,6 +220,10 @@ impl PeakPicker {
         }
     }
 
+    /// Pick peaks from `mz_array` and `intensity_array` between `start_mz` and `stop_mz`,
+    /// pushing new peaks into `peak_accumulator`.
+    ///
+    /// Returns the number of peaks picked if successful
     pub fn discover_peaks_in_interval(
         &self,
         mz_array: &[f64],
@@ -165,27 +263,39 @@ impl PeakPicker {
                 let mut fwhm = 0.0;
                 let mut signal_to_noise =
                     approximate_signal_to_noise(current_intensity, intensity_array, index);
-                // eprintln!("Begin fitting peak at {}, mz {:0.3}, intensity {:0.3} ({:0.3}, {:0.3})", index, current_mz, current_intensity, last_intensity, next_intensity);
+
                 partial_fit_state.signal_to_noise = signal_to_noise;
+
                 // Run Full-Width Half-Max algorithm to try to improve SNR
                 if signal_to_noise < signal_to_noise_threshold {
                     let shape_fit =
                         full_width_at_half_max(mz_array, intensity_array, index, signal_to_noise);
                     partial_fit_state.update(&shape_fit);
+
                     fwhm = partial_fit_state.full_width_at_half_max;
                     if (0.0 < fwhm) && (fwhm < 0.5) {
                         // TODO: Try to use local searches here instead of full range searches
-                        let ilow = nearest_left(mz_array, current_mz - partial_fit_state.left_width as f64, index);
-                        let ihigh = nearest_right(mz_array, current_mz + partial_fit_state.right_width as f64, index);
+                        let ilow = nearest_left(
+                            mz_array,
+                            current_mz - partial_fit_state.left_width as f64,
+                            index,
+                        );
+                        let ihigh = nearest_right(
+                            mz_array,
+                            current_mz + partial_fit_state.right_width as f64,
+                            index,
+                        );
 
                         let low_intensity = intensity_array[ilow];
                         let high_intensity = intensity_array[ihigh];
                         let sum_intensity = low_intensity + high_intensity;
+
                         if sum_intensity > 0.0 {
                             signal_to_noise = (2.0 * current_intensity) / sum_intensity;
                         } else {
                             signal_to_noise = 10.0;
                         }
+
                         partial_fit_state.signal_to_noise = signal_to_noise;
                     }
                 }
@@ -213,15 +323,22 @@ impl PeakPicker {
                             signal_to_noise = current_intensity;
                         }
 
-                        let peak = FittedPeak::new(fitted_mz, current_intensity, index as u32, signal_to_noise, fwhm);
+                        let peak = FittedPeak::new(
+                            fitted_mz,
+                            current_intensity,
+                            index as u32,
+                            signal_to_noise,
+                            fwhm,
+                        );
                         // eprintln!("Storing peak with mz {:0.3}/{:0.3} with FWHM {:0.3}", fitted_mz, current_mz, fwhm);
                         peak_accumulator.push(peak);
                         partial_fit_state.reset();
-                        while index < stop_index && isclose(intensity_array[index + 1], current_intensity) {
+                        while index < stop_index
+                            && isclose(intensity_array[index + 1], current_intensity)
+                        {
                             // eprintln!("Advancing over equal intensity point {} @ {}", index, current_intensity);
                             index += 1;
                         }
-
                     } else {
                         // eprintln!("Skipping peak with FWHM {:03} and SNR {:03}", fwhm, signal_to_noise)
                     }
@@ -357,7 +474,7 @@ pub fn pick_peaks(
     let picker = PeakPicker::default();
     let mut acc = Vec::new();
     if !is_increasing(mz_array) {
-        return Err(PeakPickerError::MZNotSorted)
+        return Err(PeakPickerError::MZNotSorted);
     }
     match picker.discover_peaks(mz_array, intensity_array, &mut acc) {
         Ok(_) => Ok(acc),

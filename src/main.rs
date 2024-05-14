@@ -6,7 +6,7 @@ use std::io::prelude::*;
 use std::process;
 
 use mzsignal::denoise::denoise;
-use mzsignal::peak::FittedPeak;
+use mzsignal::FittedPeak;
 use mzsignal::peak_picker;
 
 fn main() -> io::Result<()> {
@@ -53,10 +53,8 @@ pick peaks from those points, and write the resulting peaks to STDOUT in tab sep
         }
         eprintln!("Read {} items from STDIN", mz_array.len());
     }
-    let picker = peak_picker::PeakPicker {
-        signal_to_noise_threshold: 3.0,
-        .. Default::default()
-    };
+    let mut picker = peak_picker::PeakPicker::default();
+    picker.signal_to_noise_threshold = 3.0;
     let mut acc = Vec::new();
     match picker.discover_peaks(&mz_array, &intensity_array, &mut acc) {
         Ok(count) => {

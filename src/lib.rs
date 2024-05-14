@@ -82,8 +82,8 @@
 pub mod arrayops;
 pub mod average;
 pub mod denoise;
-pub mod histogram;
-pub mod peak;
+pub(crate) mod histogram;
+pub(crate) mod peak;
 pub mod peak_picker;
 pub mod peak_statistics;
 pub mod smooth;
@@ -100,5 +100,6 @@ mod test_data;
 
 pub use crate::arrayops::ArrayPair;
 pub use crate::peak::FittedPeak;
+pub use crate::histogram::{Histogram, percentile};
 pub use crate::peak_picker::{pick_peaks, PeakFitType, PeakPicker, PeakPickerError};
-pub use crate::feature_mapping::{PeakMapBuilderType, LCMSMapBuilder, IMMSMapBuilder, PeakMapBuilder};
+pub use crate::feature_mapping::{FeatureExtracterType, LCMSMapExtracter, IMMSMapExtracter, FeatureExtracter};

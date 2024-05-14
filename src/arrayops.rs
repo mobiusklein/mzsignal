@@ -185,7 +185,7 @@ impl<'lifespan> ArrayPair<'lifespan> {
     }
 }
 
-impl<'lifespan> convert::From<(Cow<'lifespan, [f64]>, Cow<'lifespan, [f32]>)>
+impl<'lifespan> From<(Cow<'lifespan, [f64]>, Cow<'lifespan, [f32]>)>
     for ArrayPair<'lifespan>
 {
     fn from(pair: (Cow<'lifespan, [f64]>, Cow<'lifespan, [f32]>)) -> ArrayPair<'lifespan> {
@@ -193,13 +193,13 @@ impl<'lifespan> convert::From<(Cow<'lifespan, [f64]>, Cow<'lifespan, [f32]>)>
     }
 }
 
-impl<'lifespan> convert::From<(&'lifespan [f64], &'lifespan [f32])> for ArrayPair<'lifespan> {
+impl<'lifespan> From<(&'lifespan [f64], &'lifespan [f32])> for ArrayPair<'lifespan> {
     fn from(pair: (&'lifespan [f64], &'lifespan [f32])) -> ArrayPair<'lifespan> {
         ArrayPair::wrap(pair.0, pair.1)
     }
 }
 
-impl<'lifespan> convert::From<(Vec<f64>, Vec<f32>)> for ArrayPair<'lifespan> {
+impl<'lifespan> From<(Vec<f64>, Vec<f32>)> for ArrayPair<'lifespan> {
     fn from(pair: (Vec<f64>, Vec<f32>)) -> ArrayPair<'lifespan> {
         let mz_array = Cow::Owned(pair.0);
         let intensity_array = Cow::Owned(pair.1);

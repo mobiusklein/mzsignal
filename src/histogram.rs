@@ -1,4 +1,4 @@
-use num_traits::{Float, FromPrimitive, ToPrimitive};
+use num_traits::{Float, FromPrimitive, ToPrimitive, Zero};
 
 use crate::arrayops::minmax;
 
@@ -38,6 +38,26 @@ impl<T: Float + Default + FromPrimitive> Histogram<T> {
         let mut hist = Histogram::default();
         hist.populate(values, bins);
         hist
+    }
+
+    pub fn new_freedman_diaconis(values: &[T]) -> Histogram<T> {
+        let width = freedman_diaconis_bin_width(values);
+        if width.is_zero() {
+            return Histogram::new(values, 1)
+        }
+        let (min, max) = minmax(values);
+        let bins = ((max - min).to_f64().unwrap() / width).to_usize().unwrap() + 1;
+        Self::new(values, bins)
+    }
+
+    pub fn new_sturges(values: &[T]) -> Histogram<T> {
+        let width = sturges_bin_width(values);
+        if width.is_zero() {
+            return Histogram::new(values, 1)
+        }
+        let (min, max) = minmax(values);
+        let bins = ((max - min).to_f64().unwrap() / width).to_usize().unwrap() + 1;
+        Self::new(values, bins)
     }
 
     pub fn clear(&mut self) {

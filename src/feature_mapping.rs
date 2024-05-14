@@ -1,3 +1,5 @@
+//!
+//!
 use std::collections::{HashSet, VecDeque};
 use std::hash::Hash;
 use std::marker::PhantomData;
@@ -14,9 +16,12 @@ use mzpeaks::{
 
 use crate::search::nearest;
 
+/// Represents a coordinate in a [`PeakMapState`].
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct MapIndex {
+    /// The time index effectively refers to the row in [`PeakMapState::peak_table`]
     time_index: usize,
+    /// The time index effectively refers to the column in the `time_index`-th row in [`PeakMapState::peak_table`]
     peak_index: usize,
 }
 
@@ -27,24 +32,11 @@ impl MapIndex {
             peak_index,
         }
     }
-
-    pub fn time_index(&self) -> usize {
-        self.time_index
-    }
-
-    pub fn time_index_mut(&mut self) -> &mut usize {
-        &mut self.time_index
-    }
-
-    pub fn peak_index(&self) -> usize {
-        self.peak_index
-    }
-
-    pub fn peak_index_mut(&mut self) -> &mut usize {
-        &mut self.peak_index
-    }
 }
 
+
+/// Connects two coordinates in a [`PeakMapState`], carrying some quality
+/// information about the linkage.
 #[derive(Debug, Default, Clone, Copy, PartialEq, PartialOrd)]
 pub struct MapLink {
     from_index: MapIndex,
@@ -74,12 +66,16 @@ impl MapLink {
         }
     }
 
+    /// Compute a summary metric of how good of a link this is.
+    ///
+    /// This is used to solve the dynamic programming problem when
+    /// extracting paths.
     pub fn score(&self) -> f32 {
         self.intensity_weight * (self.mass_error.powi(4) as f32)
     }
 }
 
-/// Merge [`mzpeaks::feature::FeatureLike`] entities which are within the same mass dimension
+/// Merge [`FeatureLike`] entities which are within the same mass dimension
 /// error tolerance and within a certain time of one-another by constructing a graph, extracting
 /// connected components, and stitch them together.
 pub trait FeatureGraphBuilder<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone> {
@@ -178,6 +174,7 @@ pub trait FeatureGraphBuilder<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> 
     }
 }
 
+/// A trivial implementation of [`FeatureGraphBuilder`] using its default implementation
 #[derive(Debug, Default, Clone)]
 pub struct FeatureMerger<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone> {
     _d: PhantomData<D>,
@@ -190,6 +187,8 @@ impl<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone> FeatureGraphBuil
 {
 }
 
+/// An implementation of [`FeatureGraphBuilder`] that only permits edges between
+/// nodes which have equal charge states
 #[derive(Debug, Default, Clone)]
 pub struct ChargeAwareFeatureMerger<
     D,
@@ -204,6 +203,8 @@ pub struct ChargeAwareFeatureMerger<
 impl<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone + KnownCharge>
     FeatureGraphBuilder<D, T, F> for ChargeAwareFeatureMerger<D, T, F>
 {
+    /// This is identical to the default implementation save that
+    /// it enforces the limitation on charge state matches.
     fn build_graph(
         &self,
         features: &FeatureMap<D, T, F>,
@@ -250,9 +251,12 @@ impl<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone + KnownCharge>
 }
 
 
+/// A sparse, immutable matrix of peaks over time, the default [`MapState`] implementation.
 #[derive(Default, Debug, Clone)]
 pub struct PeakMapState<C: IndexedCoordinate<D> + IntensityMeasurement, D> {
+    /// A mapping from row index to time coordinate given by some external dimension `T`
     pub time_axis: Vec<f64>,
+    /// The peaks of type `C` on coordinate system `D` at each time point
     pub peak_table: Vec<PeakSetVec<C, D>>,
 }
 
@@ -266,26 +270,42 @@ impl<D, C: IndexedCoordinate<D> + IntensityMeasurement> PeakMapState<C, D> {
     }
 }
 
+/// Defines operations on a peak-over-time map
 pub trait MapState<C: IndexedCoordinate<D> + IntensityMeasurement + 'static, D: 'static, T> {
+    /// The type of feature this map is eventually made of. Must implement [`FeatureLike`]
+    /// and [`FeatureLikeMut`].
     type FeatureType: FeatureLike<D, T> + Default + FeatureLikeMut<D, T> + Clone;
+
+    /// The implementation of [`FeatureGraphBuilder`] to use with this map's [`MapState::FeatureType`]
     type FeatureMergerType: FeatureGraphBuilder<D, T, Self::FeatureType> + Default;
 
+    /// Get a reference to the time axis as a slice of floats
     fn time_axis(&self) -> &[f64];
+
+    /// Get a reference to the sparse peak table
     fn peak_table(&self) -> &[PeakSetVec<C, D>];
+
+    /// Fill the peak table from an iterator over (time, peak list)s
     fn populate_from_iterator(&mut self, it: impl Iterator<Item = (f64, PeakSetVec<C, D>)>);
 
+    /// The length of the time dimension of the map
     fn len(&self) -> usize {
         self.time_axis().len()
     }
 
+    /// Whether there are any peak slices in the map
     fn is_empty(&self) -> bool {
         self.time_axis().is_empty()
     }
 
+    /// Iterate over the peaks in row `time_index`
+    ///
+    /// This function panics if `time_index` is out of bounds
     fn iter_at_index(&self, time_index: usize) -> impl Iterator<Item = &C> {
         self.peak_table()[time_index].iter()
     }
 
+    /// The change in absolute time between time indices `i` and `j`
     fn time_delta(&self, i: usize, j: usize) -> Option<f64> {
         let ti = self.time_axis().get(i);
         let tj = self.time_axis().get(j);
@@ -297,10 +317,15 @@ pub trait MapState<C: IndexedCoordinate<D> + IntensityMeasurement + 'static, D: 
         }
     }
 
+    /// Find the time index closest to `time`
     fn nearest_time_point(&self, time: f64) -> usize {
         nearest(&self.time_axis(), time, 0)
     }
 
+    /// Iterate over [`MapIndex`] coordinates for the `query` peak in the row at `time_index`
+    /// within `error_tolerance` mass error.
+    ///
+    /// This function panics if `time_index` is out of bounds
     fn query_with_index<'a>(
         &'a self,
         query: &'a C,
@@ -312,6 +337,10 @@ pub trait MapState<C: IndexedCoordinate<D> + IntensityMeasurement + 'static, D: 
             .map(move |p| MapIndex::new(time_index, p.get_index() as usize))
     }
 
+    /// Iterate over [`MapIndex`] coordinates for the `query` peak in the row closest
+    /// to `time` within `error_tolerance` mass error.
+    ///
+    /// Relies on [`MapState::nearest_time_point`] and [`MapState::query_with_index`]
     fn query<'a>(
         &'a self,
         query: &'a C,
@@ -322,10 +351,12 @@ pub trait MapState<C: IndexedCoordinate<D> + IntensityMeasurement + 'static, D: 
         self.query_with_index(query, time_index, error_tolerance)
     }
 
+    /// Retrieve the peak at [`MapIndex`]
     fn peak_at(&self, index: MapIndex) -> &C {
         &self.peak_table()[index.time_index][index.peak_index]
     }
 
+    /// Convert a [`MapPath`] into an instance of [`Self::FeatureType`]
     fn path_to_feature(&self, path: &MapPath) -> Self::FeatureType {
         let mut feature = Self::FeatureType::default();
         for link in path.iter() {
@@ -336,6 +367,10 @@ pub trait MapState<C: IndexedCoordinate<D> + IntensityMeasurement + 'static, D: 
         feature
     }
 
+    /// Merge features which are within `mass_error_tolerance` of each other in the `D` dimension
+    /// and within `maximum_gap_size` time units of each other.
+    ///
+    /// Uses [`MapState::FeatureMergerType`] to carry out the actual merging.
     fn merge_features(
         &self,
         features: &FeatureMap<D, T, Self::FeatureType>,
@@ -386,6 +421,9 @@ impl<
     }
 }
 
+
+/// A [`MapState`] implementation that restricts peak matches to only those which have
+/// the same charge state.
 #[derive(Default, Debug, Clone)]
 pub struct ChargedPeakMapState<C: IndexedCoordinate<D> + IntensityMeasurement + KnownCharge, D> {
     pub time_axis: Vec<f64>,
@@ -455,11 +493,14 @@ impl<C: IndexedCoordinate<D> + IntensityMeasurement + KnownCharge, D> ChargedPea
     }
 }
 
+
+/// Represents a sequence of [`MapLink`] entries with a dynamic programming
+/// score.
 #[derive(Default, Debug, Clone, PartialEq)]
 pub struct MapPath {
     indices: Vec<MapLink>,
-    coordinate: f64,
-    score: f32,
+    pub coordinate: f64,
+    pub score: f32,
 }
 
 impl PartialOrd for MapPath {
@@ -518,8 +559,9 @@ impl MapPath {
 pub type MapCell = Vec<MapLink>;
 pub type MapCells = Vec<MapCell>;
 
+/// Extracts features from a [`MapState`] type using dynamic programming.
 #[derive(Debug, Clone)]
-pub struct PeakMapBuilderType<
+pub struct FeatureExtracterType<
     S: MapState<C, D, T>,
     C: IndexedCoordinate<D> + IntensityMeasurement + 'static,
     D: 'static,
@@ -533,9 +575,9 @@ pub struct PeakMapBuilderType<
 }
 
 impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
-    PeakMapBuilderType<S, C, D, T>
+    FeatureExtracterType<S, C, D, T>
 {
-    pub fn new(state: S, paths: Vec<MapCells>) -> Self {
+    fn init(state: S, paths: Vec<MapCells>) -> Self {
         Self {
             state,
             paths,
@@ -545,12 +587,14 @@ impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
         }
     }
 
-    pub fn from_state(state: S) -> Self {
-        let mut this = Self::new(state, Vec::new());
-        this.paths.resize_with(this.state.len(), MapCells::new);
-        this
+    pub fn new(state: S) -> Self {
+        let mut paths = Vec::with_capacity(state.len());
+        paths.resize_with(state.len(), MapCells::new);
+
+        Self::init(state, paths)
     }
 
+    /// Drop associated dynamic programming table and retrieve the enclosed [`MapState`]
     pub fn into_inner(self) -> S {
         self.state
     }
@@ -599,6 +643,12 @@ impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
         path.score += score;
     }
 
+    /// Extract features from the peak map, connecting peaks whose `D` mass coordinate
+    /// is within `error_tolerance` units of each other, of at least `min_length` points
+    /// long, and having gaps of no more than `maximum_gap_size` `T` time units wide.
+    ///
+    /// This uses two dynamic programming algorithms, first a single span greedy path
+    /// building stage followed by a gap bridging stage to tie together disjoint features.
     pub fn extract_features(
         &mut self,
         error_tolerance: Tolerance,
@@ -674,7 +724,7 @@ impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
 }
 
 impl<S: MapState<C, D, T> + Default, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
-    FromIterator<(f64, PeakSetVec<C, D>)> for PeakMapBuilderType<S, C, D, T>
+    FromIterator<(f64, PeakSetVec<C, D>)> for FeatureExtracterType<S, C, D, T>
 {
     fn from_iter<I: IntoIterator<Item = (f64, PeakSetVec<C, D>)>>(iter: I) -> Self {
         let mut state = S::default();
@@ -684,28 +734,39 @@ impl<S: MapState<C, D, T> + Default, C: IndexedCoordinate<D> + IntensityMeasurem
 }
 
 impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement + 'static, D, T> From<S>
-    for PeakMapBuilderType<S, C, D, T>
+    for FeatureExtracterType<S, C, D, T>
 {
     fn from(value: S) -> Self {
-        Self::from_state(value)
+        Self::new(value)
     }
 }
 
-pub type PeakMapBuilder<C, T> = PeakMapBuilderType<PeakMapState<C, MZ>, C, MZ, T>;
-pub type LCMSMapBuilder<C> = PeakMapBuilder<C, Time>;
-pub type IMMSMapBuilder<C> = PeakMapBuilder<C, IonMobility>;
+pub type FeatureExtracter<C, T> = FeatureExtracterType<PeakMapState<C, MZ>, C, MZ, T>;
+pub type LCMSMapExtracter<C> = FeatureExtracter<C, Time>;
+pub type IMMSMapExtracter<C> = FeatureExtracter<C, IonMobility>;
 
-pub type DeconvolvedPeakMapBuilder<C, T> =
-    PeakMapBuilderType<ChargedPeakMapState<C, Mass>, C, Mass, T>;
-pub type DeconvolvedLCMSMapBuilder<C> = DeconvolvedPeakMapBuilder<C, Time>;
-pub type DeconvolvedIMMSMapBuilder<C> = DeconvolvedPeakMapBuilder<C, IonMobility>;
+pub type DeconvolvedFeatureExtracter<C, T> =
+    FeatureExtracterType<ChargedPeakMapState<C, Mass>, C, Mass, T>;
+pub type DeconvolvedLCMSMapExtracter<C> = DeconvolvedFeatureExtracter<C, Time>;
+pub type DeconvolvedIMMSMapExtracter<C> = DeconvolvedFeatureExtracter<C, IonMobility>;
 
+
+/// A node in a graph representing a feature stored in some other collection
+/// that holds extra state for [`TarjanStronglyConnectedComponents`].
 #[derive(Debug, Default, Clone)]
 pub struct FeatureNode {
+    /// The location in the external collection where the feature this node represents
+    /// resides.
     pub feature_index: usize,
+    /// The indices of the related features in the external collection which this feature
+    /// connects to.
     pub edges: Vec<FeatureLink>,
+    /// The stack index produced by Tarjan's strongly connected component.
     index: Option<usize>,
+    /// The putative root index for the current connected component while this
+    /// node was on the stack.
     low_link: Option<usize>,
+    /// Whether or not this node is still on the stack.
     on_stack: bool,
 }
 
@@ -719,6 +780,8 @@ impl FeatureNode {
     }
 }
 
+/// Describes a relationship between two features in some collection
+/// with static indices.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct FeatureLink {
     pub from_index: usize,
@@ -734,7 +797,20 @@ impl FeatureLink {
     }
 }
 
-/// Assumes nodes are in ascending (D, T) order
+/// An implementation of Tarjan's strongly connected components algorithm.
+///
+/// The main goal is to identify all connected components of the graph which
+/// represent segments of what could be the same feature. The manner of the
+/// graph's construction may influence how truly related those segments are.
+///
+/// Once connected components are identified, some other algorithm may take
+/// care of merging them applying whatever criteria they consider necessary.
+///
+/// Graph nodes are represented by `usize` values, corresponding to [`FeatureNode::feature_index`]
+/// and as such components are just [`Vec<usize>`].
+///
+/// # See also:
+/// This is a near direct translation of the pseudocode from [Wikipedia](https://en.wikipedia.org/wiki/Tarjan%27s_strongly_connected_components_algorithm)
 #[derive(Debug, Default)]
 pub struct TarjanStronglyConnectedComponents {
     nodes: Vec<FeatureNode>,
@@ -773,6 +849,7 @@ impl TarjanStronglyConnectedComponents {
             .collect()
     }
 
+    /// Identify all connected components iteratively.
     pub fn solve(&mut self) {
         let mut stack = Vec::new();
 
@@ -791,6 +868,9 @@ impl TarjanStronglyConnectedComponents {
         self.nodes.get(node_index).unwrap()
     }
 
+    /// Iterate over the connected components of the graph. This will
+    /// be an empty iterator if [`TarjanStronglyConnectedComponents::solve`]
+    /// has not been called yet.
     pub fn iter(&self) -> std::slice::Iter<Vec<usize>> {
         self.connected_components.iter()
     }
@@ -850,7 +930,11 @@ impl IntoIterator for TarjanStronglyConnectedComponents {
     }
 }
 
-
+// An implementation detail, [`mzpeaks::feature_map`] doesn't always have an
+// index-yielding search method, and [`FeatureLike`] types
+// do not carry their sort index around with them, so this defines a wrapper
+// type that provides the same API, but also carries around an index. Should
+// not really be needed outside this module.
 mod index_impl {
     use super::*;
 
@@ -972,7 +1056,7 @@ mod test {
         }
 
         let peak_map_state = PeakMapState::new(time_axis, peak_table);
-        let mut peak_map_builder = PeakMapBuilder::<_, Time>::from_state(peak_map_state);
+        let mut peak_map_builder = FeatureExtracter::<_, Time>::new(peak_map_state);
         let features = peak_map_builder.extract_features(Tolerance::PPM(10.0), 3, 0.25);
 
         if false {
