@@ -1,3 +1,6 @@
+//! Algorithm for finding simple symmetric peaks in a 1D array iteratively.
+//!
+//!
 use std::cmp;
 use std::ops;
 
@@ -11,6 +14,7 @@ use rayon::prelude::*;
 
 use crate::peak::FittedPeak;
 use crate::peak_statistics::isclose;
+use crate::peak_statistics::lorentzian_fit;
 use crate::peak_statistics::{
     approximate_signal_to_noise, full_width_at_half_max, quadratic_fit, WidthFit,
 };
@@ -19,9 +23,9 @@ use std::collections::btree_map::{BTreeMap, Entry};
 
 /// The type of peak picking to perform, defining the expected
 /// peak shape fitting function.
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum PeakFitType {
-    /// Fit a gaussian peak shape using a closed form quadratic function to
+    /// Fit a Gaussian peak shape using a closed form quadratic function to
     /// determine the true peak centroid from the digitized signal.
     #[default]
     Quadratic,
@@ -29,6 +33,9 @@ pub enum PeakFitType {
     /// centroid. If the digitized signal doesn't directly strike
     /// the apex, there will be a small amount of error.
     Apex,
+    /// Fit a Lorentzian peak shape using an iterative least squares solution
+    /// searching an approximate local optimum.
+    Lorentzian
 }
 
 /// Check if the value in `it` are monotonically ascending or flat
@@ -94,7 +101,7 @@ pub enum PeakPickerError {
     MZNotSorted,
 }
 
-/// A peak picker
+/// A peak picker for mass spectra
 #[derive(Debug, Clone, Default)]
 pub struct PeakPicker {
     pub background_intensity: f32,
@@ -206,7 +213,6 @@ impl PeakPicker {
     /// simply `mz_array[index]`.
     ///
     /// Returns the estimated m/z of the "true" peak.
-    #[allow(unused_variables)]
     pub fn fit_peak(
         &self,
         index: usize,
@@ -217,6 +223,7 @@ impl PeakPicker {
         match self.fit_type {
             PeakFitType::Quadratic => quadratic_fit(mz_array, intensity_array, index),
             PeakFitType::Apex => mz_array[index],
+            PeakFitType::Lorentzian => lorentzian_fit(mz_array, intensity_array, index, partial_fit),
         }
     }
 
@@ -467,6 +474,11 @@ impl PeakPicker {
     }
 }
 
+
+/// A convenience function that uses a default peak picking configuration to pick peaks from paired
+/// m/z and intensity arrays.
+///
+/// Performs a minimal m/z sorting check with [`is_increasing`]
 pub fn pick_peaks(
     mz_array: &[f64],
     intensity_array: &[f32],

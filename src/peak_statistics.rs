@@ -1,5 +1,5 @@
-use std::fmt::Debug;
-
+//! Helpful numerical functions for fitting symmetric 1D peaks
+//!
 use cfg_if::cfg_if;
 use num_traits;
 use num_traits::{Float, FromPrimitive};
@@ -9,21 +9,24 @@ use ndarray::Array2;
 #[cfg(feature = "ndarray-linalg")]
 use ndarray_linalg::Inverse;
 
-pub fn _isclose<T>(x: T, y: T, rtol: T, atol: T) -> bool
+use crate::peak_picker::PartialPeakFit;
+use crate::search::nearest;
+
+pub(crate) fn _isclose<T>(x: T, y: T, rtol: T, atol: T) -> bool
 where
     T: Float,
 {
     (x - y).abs() <= (atol + rtol * y.abs())
 }
 
-pub fn isclose<T>(x: T, y: T) -> bool
+pub(crate) fn isclose<T>(x: T, y: T) -> bool
 where
     T: Float + FromPrimitive,
 {
     _isclose(x, y, T::from_f64(1e-5).unwrap(), T::from_f64(1e-8).unwrap())
 }
 
-pub fn aboutzero<T>(x: T) -> bool
+pub(crate) fn aboutzero<T>(x: T) -> bool
 where
     T: Float + FromPrimitive,
 {
@@ -33,7 +36,9 @@ where
 const MINIMUM_SIGNAL_TO_NOISE: f32 = 4.0;
 const MAX_WIDTH: f64 = 1.5;
 
-/// Approximate signal to noise ratios for  the target intensity value
+/// Approximate signal to noise ratios for the target intensity value
+/// by doing a local search for the next nearest maximum on either side
+/// of the target.
 pub fn approximate_signal_to_noise<Y: Float + FromPrimitive>(
     target_val: Y,
     intensity_array: &[Y],
@@ -81,15 +86,22 @@ pub fn approximate_signal_to_noise<Y: Float + FromPrimitive>(
         } else {
             target_val / min_intensity_right
         }
-    }
-    else if min_intensity_right < min_intensity_left && !aboutzero(min_intensity_right) {
+    } else if min_intensity_right < min_intensity_left && !aboutzero(min_intensity_right) {
         target_val / min_intensity_right
     } else {
         target_val / min_intensity_left
     }
 }
 
-pub fn curve_regression<T: Float + Into<f64> + Debug, U: Float + Into<f64> + Debug>(xs: &[T], ys: &[U], n: usize, terms: &mut [f64; 2]) -> f64 {
+/// Fit a polynomial regression to one side of a peak
+///
+/// Implementation depends upon the linear algebra backend.
+pub(crate) fn curve_regression<T: Float + Into<f64>, U: Float + Into<f64>>(
+    xs: &[T],
+    ys: &[U],
+    n: usize,
+    terms: &mut [f64; 2],
+) -> f64 {
     cfg_if! {
         if #[cfg(feature = "ndarray")] {
             curve_regression_ndarray(xs, ys, n, terms)
@@ -100,9 +112,15 @@ pub fn curve_regression<T: Float + Into<f64> + Debug, U: Float + Into<f64> + Deb
     }
 }
 
+#[doc(hidden)]
 #[allow(non_snake_case)]
 #[cfg(feature = "ndarray")]
-pub fn curve_regression_ndarray<T: Float + Into<f64>, U: Float + Into<f64>>(xs: &[T], ys: &[U], n: usize, terms: &mut [f64; 2]) -> f64 {
+pub(crate) fn curve_regression_ndarray<T: Float + Into<f64>, U: Float + Into<f64>>(
+    xs: &[T],
+    ys: &[U],
+    n: usize,
+    terms: &mut [f64; 2],
+) -> f64 {
     // Based upon
     // https://github.com/PNNL-Comp-Mass-Spec/DeconTools/blob/0a7bde357af0551bedf44368c847cc15c70c7ace/DeconTools.Backend/ProcessingTasks/Deconvoluters/HornDeconvolutor/ThrashV1/PeakProcessing/PeakStatistician.cs#L227
     let n_terms: usize = 1;
@@ -146,16 +164,26 @@ pub fn curve_regression_ndarray<T: Float + Into<f64>, U: Float + Into<f64>>(xs: 
     }
 }
 
+#[doc(hidden)]
 #[allow(non_snake_case)]
 #[cfg(feature = "nalgebra")]
-pub fn curve_regression_nalgebra<T: Float + Into<f64> + Debug, U: Float + Into<f64> + Debug>(xs: &[T], ys: &[U], n: usize, terms: &mut [f64; 2]) -> f64 {
+pub(crate) fn curve_regression_nalgebra<
+    T: Float + Into<f64>,
+    U: Float + Into<f64>,
+>(
+    xs: &[T],
+    ys: &[U],
+    n: usize,
+    terms: &mut [f64; 2],
+) -> f64 {
     use nalgebra;
-    use nalgebra::{Matrix, Dim, dimension::Dyn};
+    use nalgebra::{dimension::Dyn, Dim, Matrix};
     // Based upon
     // https://github.com/PNNL-Comp-Mass-Spec/DeconTools/blob/0a7bde357af0551bedf44368c847cc15c70c7ace/DeconTools.Backend/ProcessingTasks/Deconvoluters/HornDeconvolutor/ThrashV1/PeakProcessing/PeakStatistician.cs#L227
     let n_terms: usize = 1;
 
-    let mut A: Matrix<f64, _, _, _> = Matrix::zeros_generic(Dyn::from_usize(2usize), Dyn::from_usize(n));//::<f64>::zeros((2, n));
+    let mut A: Matrix<f64, _, _, _> =
+        Matrix::zeros_generic(Dyn::from_usize(2usize), Dyn::from_usize(n)); //::<f64>::zeros((2, n));
     for i in 0..n {
         A[(0, i)] = 1.0;
         for j in 1..n_terms {
@@ -195,10 +223,14 @@ pub fn curve_regression_nalgebra<T: Float + Into<f64> + Debug, U: Float + Into<f
     }
 }
 
+/// A fit of the left, right, and full width at half maximum
 #[derive(Default, Debug, Clone)]
 pub struct WidthFit {
+    /// The right width at half max
     pub right_width: f64,
+    /// The left width at half max
     pub left_width: f64,
+    /// The full width at half max, "FWHM"
     pub full_width_at_half_max: f64,
 }
 
@@ -215,7 +247,7 @@ pub fn fit_rising_side_width(
     let mut last_y1 = peak;
 
     if peak == 0.0 {
-        return mz
+        return mz;
     }
 
     let mut upper = mz_array[0];
@@ -287,7 +319,7 @@ pub fn fit_falling_side_width(
     let mut last_y1 = peak;
 
     if peak == 0.0 {
-        return mz
+        return mz;
     }
 
     for index in data_index..n {
@@ -339,6 +371,7 @@ pub fn fit_falling_side_width(
     lower
 }
 
+/// Fit both sides of a peak, producing a summary of peak shape features
 pub fn full_width_at_half_max(
     mz_array: &[f64],
     intensity_array: &[f32],
@@ -377,9 +410,10 @@ pub fn full_width_at_half_max(
     fit
 }
 
-/// Fit a gaussian peak shape at `index`.
+/// Fit a Gaussian peak shape at `index`.
 pub fn quadratic_fit(mz_array: &[f64], intensity_array: &[f32], index: usize) -> f64 {
-    let n = mz_array.len() - 1;
+    let n = mz_array.len().saturating_sub(1);
+
     if index < 1 {
         mz_array[0]
     } else if index > n {
@@ -402,12 +436,123 @@ pub fn quadratic_fit(mz_array: &[f64], intensity_array: &[f32], index: usize) ->
 }
 
 
+fn lorentzian_least_squares(
+    mz_array: &[f64],
+    intensity_array: &[f32],
+    amplitude: f64,
+    partial_peak_fit: &PartialPeakFit,
+    v0: f64,
+    lstart: usize,
+    lstop: usize,
+) -> f64 {
+
+    assert!(mz_array.len() > lstop);
+    assert!(mz_array.len() > lstart);
+    assert!(intensity_array.len() > lstop);
+    assert!(intensity_array.len() > lstart);
+
+    let rmse = (lstart..=lstop)
+        .into_iter()
+        .map(|i| {
+            let u = (partial_peak_fit.full_width_at_half_max as f64) * (mz_array[i] - v0);
+            let y1 = amplitude / (1.0 + u * u);
+            let y2 = intensity_array[i] as f64;
+            (y1 - y2).powi(2)
+        })
+        .sum();
+    rmse
+}
+
+/// Fit a Lorentzian peak shape at `index`.
+///
+/// Useful compared to the Gaussian peak shape when the tails of the peak are
+/// longer
+/// <img src="https://upload.wikimedia.org/wikipedia/commons/f/f4/Gauss_and_Lorentz_lineshapes.svg" width="800" />
+///
+/// Credit: <https://upload.wikimedia.org/wikipedia/commons/f/f4/Gauss_and_Lorentz_lineshapes.svg>
+pub fn lorentzian_fit(
+    mz_array: &[f64],
+    intensity_array: &[f32],
+    index: usize,
+    partial_peak_fit: &PartialPeakFit,
+) -> f64 {
+    let amplitude = intensity_array[index] as f64;
+    let mut v0 = mz_array[index];
+    let step = ((v0 - mz_array[index + 1]) / 100.0).abs();
+
+    if index < 1 {
+        return v0;
+    } else if index >= mz_array.len().saturating_sub(1) {
+        return *mz_array.last().unwrap();
+    }
+
+    let lstop = nearest(
+        mz_array,
+        v0 + partial_peak_fit.full_width_at_half_max as f64,
+        index,
+    ) + 1;
+    let lstart = nearest(
+        mz_array,
+        v0 - partial_peak_fit.full_width_at_half_max as f64,
+        index,
+    )
+    .saturating_sub(1);
+
+    let mut current_error = lorentzian_least_squares(
+        mz_array,
+        intensity_array,
+        amplitude,
+        partial_peak_fit,
+        v0,
+        lstart,
+        lstop,
+    );
+    let mut last_error: f64 = f64::INFINITY;
+
+    for _ in 0..50 {
+        last_error = current_error;
+        v0 += step;
+        current_error = lorentzian_least_squares(
+            mz_array,
+            intensity_array,
+            amplitude,
+            partial_peak_fit,
+            v0,
+            lstart,
+            lstop,
+        );
+        if current_error > last_error {
+            break;
+        }
+    }
+
+    current_error = last_error;
+    v0 -= step;
+    for _ in 0..50 {
+        last_error = current_error;
+        v0 -= step;
+        current_error = lorentzian_least_squares(
+            mz_array,
+            intensity_array,
+            amplitude,
+            partial_peak_fit,
+            v0,
+            lstart,
+            lstop,
+        );
+        if current_error > last_error {
+            break;
+        }
+    }
+
+    v0 + step
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
     use crate::test_data::{read_1col, read_cols};
+    use std::fs;
     use std::io;
     use std::io::prelude::*;
-    use std::fs;
-
 }
