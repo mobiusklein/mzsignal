@@ -221,7 +221,7 @@ impl PeakPicker {
         partial_fit: &PartialPeakFit,
     ) -> f64 {
         match self.fit_type {
-            PeakFitType::Quadratic => quadratic_fit(mz_array, intensity_array, index),
+            PeakFitType::Quadratic => quadratic_fit(mz_array, intensity_array, index, partial_fit),
             PeakFitType::Apex => mz_array[index],
             PeakFitType::Lorentzian => lorentzian_fit(mz_array, intensity_array, index, partial_fit),
         }

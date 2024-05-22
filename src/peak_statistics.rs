@@ -411,20 +411,31 @@ pub fn full_width_at_half_max(
 }
 
 /// Fit a Gaussian peak shape at `index`.
-pub fn quadratic_fit(mz_array: &[f64], intensity_array: &[f32], index: usize) -> f64 {
+pub fn quadratic_fit(mz_array: &[f64], intensity_array: &[f32], index: usize, partial_peak_fit: &PartialPeakFit) -> f64 {
     let n = mz_array.len().saturating_sub(1);
+    let mut step: usize;
+    let min_dx = (partial_peak_fit.full_width_at_half_max / 10.0) as f64;
 
     if index < 1 {
         mz_array[0]
     } else if index > n {
         mz_array[n]
     } else {
-        let x1 = mz_array[index - 1];
         let x2 = mz_array[index];
-        let x3 = mz_array[index + 1];
-        let y1 = intensity_array[index - 1] as f64;
         let y2 = intensity_array[index] as f64;
-        let y3 = intensity_array[index + 1] as f64;
+
+        step = index.saturating_sub(1);
+        while step > 0 && (x2 - mz_array[step]).abs() < min_dx {
+            step = step.saturating_sub(1);
+        }
+        let x1 = mz_array[step];
+        let y1 = intensity_array[step] as f64;
+        step = index + 1;
+        while step <= n && (mz_array[step] - x2).abs() < min_dx {
+            step += 1;
+        }
+        let x3 = mz_array[step];
+        let y3 = intensity_array[step] as f64;
         let d = (y2 - y1) * (x3 - x2) - (y3 - y2) * (x2 - x1);
         if aboutzero(d) {
             x2
