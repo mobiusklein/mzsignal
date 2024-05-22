@@ -430,12 +430,14 @@ pub fn quadratic_fit(mz_array: &[f64], intensity_array: &[f32], index: usize, pa
         }
         let x1 = mz_array[step];
         let y1 = intensity_array[step] as f64;
+
         step = index + 1;
-        while step <= n && (mz_array[step] - x2).abs() < min_dx {
+        while step < n && (mz_array[step] - x2).abs() < min_dx {
             step += 1;
         }
         let x3 = mz_array[step];
         let y3 = intensity_array[step] as f64;
+
         let d = (y2 - y1) * (x3 - x2) - (y3 - y2) * (x2 - x1);
         if aboutzero(d) {
             x2

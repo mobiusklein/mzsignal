@@ -283,9 +283,10 @@ mod test {
         picker
             .discover_peaks(&averager.mz_grid, &yhat, &mut acc)
             .expect("Signal can be picked");
-        let mzs = [180.0633881, 181.06338858024316, 182.06338874740308];
-        for (peak, mz) in acc.iter().zip(mzs.iter()) {
-            assert!((peak.mz - mz).abs() < 1e-6);
+        let mzs = [180.0633881, 181.06387399204235, 182.06404644991485];
+        for (i, (peak, mz)) in acc.iter().zip(mzs.iter()).enumerate() {
+            let diff = peak.mz - mz;
+            assert!((peak.mz - mz).abs() < 1e-6, "Diff {} on peak {i}", diff);
             assert!(peak.intensity > 0.0);
         }
     }
@@ -300,9 +301,11 @@ mod test {
         picker
             .discover_peaks(&averager.mz_grid, &yhat, &mut acc)
             .expect("Signal can be picked");
-        let mzs = [180.0633881, 181.06338858024316, 182.06338874740308];
-        for (peak, mz) in acc.iter().zip(mzs.iter()) {
-            assert!((peak.mz - mz).abs() < 1e-6);
+        let mzs = [180.0633881, 181.06387399204235, 182.06404644991485];
+        for (i, (peak, mz)) in acc.iter().zip(mzs.iter()).enumerate() {
+            let diff = peak.mz - mz;
+            assert!((peak.mz - mz).abs() < 1e-6, "Diff {} on peak {i}", diff);
+            assert!(peak.intensity > 0.0);
         }
     }
 
@@ -317,9 +320,11 @@ mod test {
         picker
             .discover_peaks(&averager.mz_grid, &yhat, &mut acc)
             .expect("Signal can be picked");
-        let mzs = [180.0633881, 181.06338858024316, 182.06338874740308];
-        for (peak, mz) in acc.iter().zip(mzs.iter()) {
-            assert!((peak.mz - mz).abs() < 1e-6);
+        let mzs = [180.0633881, 181.06387399204235, 182.06404644991485];
+        for (i, (peak, mz)) in acc.iter().zip(mzs.iter()).enumerate() {
+            let diff = peak.mz - mz;
+            assert!((peak.mz - mz).abs() < 1e-6, "Diff {} on peak {i}", diff);
+            assert!(peak.intensity > 0.0);
         }
     }
 
@@ -334,9 +339,11 @@ mod test {
         picker
             .discover_peaks(&averager.mz_grid, &yhat, &mut acc)
             .expect("Signal can be picked");
-        let mzs = [180.0633881, 181.06338858024316, 182.06338874740308];
-        for (peak, mz) in acc.iter().zip(mzs.iter()) {
-            assert!((peak.mz - mz).abs() < 1e-6);
+        let mzs = [180.0633881, 181.06387399204235, 182.06404644991485];
+        for (i, (peak, mz)) in acc.iter().zip(mzs.iter()).enumerate() {
+            let diff = peak.mz - mz;
+            assert!((peak.mz - mz).abs() < 1e-6, "Diff {} on peak {i}", diff);
+            assert!(peak.intensity > 0.0);
         }
     }
 }
