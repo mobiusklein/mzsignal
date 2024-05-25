@@ -221,7 +221,7 @@ impl PeakPicker {
         partial_fit: &PartialPeakFit,
     ) -> f64 {
         match self.fit_type {
-            PeakFitType::Quadratic => quadratic_fit(mz_array, intensity_array, index),
+            PeakFitType::Quadratic => quadratic_fit(mz_array, intensity_array, index, partial_fit),
             PeakFitType::Apex => mz_array[index],
             PeakFitType::Lorentzian => lorentzian_fit(mz_array, intensity_array, index, partial_fit),
         }
@@ -309,8 +309,6 @@ impl PeakPicker {
 
                 // Found a putative peak, fit it
                 if signal_to_noise >= signal_to_noise_threshold {
-                    let fitted_mz =
-                        self.fit_peak(index, mz_array, intensity_array, &partial_fit_state);
                     if !partial_fit_state.set {
                         let shape_fit = full_width_at_half_max(
                             mz_array,
@@ -329,6 +327,9 @@ impl PeakPicker {
                         if signal_to_noise > current_intensity {
                             signal_to_noise = current_intensity;
                         }
+
+                        let fitted_mz =
+                            self.fit_peak(index, mz_array, intensity_array, &partial_fit_state);
 
                         let peak = FittedPeak::new(
                             fitted_mz,

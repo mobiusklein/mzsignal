@@ -330,7 +330,7 @@ mod test {
         let pair = reprofile(iterator, 0.01);
         eprintln!("{} {}", pair.min_mz, pair.max_mz);
         let peaks2 = pick_peaks(&pair.mz_array, &pair.intensity_array).unwrap();
-        assert_eq!(peaks2.len(), 31);
+        assert_eq!(peaks2.len(), 32);
         let p1 = peaks
             .iter()
             .max_by(|a, b| a.intensity.total_cmp(&b.intensity))
