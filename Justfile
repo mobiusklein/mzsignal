@@ -5,4 +5,4 @@ alias test := t
 
 
 changelog:
-    git cliff --latest > CHANGELOG.md
+    git cliff > CHANGELOG.md
