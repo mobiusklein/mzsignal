@@ -283,7 +283,7 @@ impl<'passing, 'transient: 'passing, 'lifespan: 'transient> PeakSetReprofiler {
 pub fn reprofile<'transient, 'lifespan: 'transient, T: Iterator<Item = &'lifespan P>, P>(
     peaks: T,
     dx: f64,
-) -> ArrayPair<'lifespan>
+) -> ArrayPair<'static>
 where
     &'lifespan P: Into<PeakShapeModel<'transient>>,
     P: 'static,

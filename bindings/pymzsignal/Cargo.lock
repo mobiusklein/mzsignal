@@ -511,17 +511,20 @@ checksum = "59058c9f26d536e00596c7dc01c5d9e88e88ec294b20a6cedc5b83ac6db804f1"
 
 [[package]]
 name = "mzpeaks"
-version = "0.12.0"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f0b6ea3480bad4f190fb1454477d2c8466e2ea0cfbf44f2033cdd2fd47c4114d"
+checksum = "441ec298d5504729db4e4b4d02b8a23f18f0ef6dfeba9e788b047d34276e589b"
+dependencies = [
+ "num-traits",
+]
 
 [[package]]
 name = "mzsignal"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "cfg-if",
  "log",
- "mzpeaks 0.12.0",
+ "mzpeaks 0.15.0",
  "nalgebra",
  "num-traits",
  "plotters",

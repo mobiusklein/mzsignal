@@ -2,12 +2,10 @@
 
 use std::borrow::Cow;
 use std::iter::Sum;
-use std::ops::{Add, Index, Range};
-
+use std::ops::{Add, Index};
 use std::convert;
 
 use num_traits::{AsPrimitive, Float, ToPrimitive, Zero};
-
 
 /// Create an evenly spaced grid from `start` to `end`, with `step` between points
 pub fn gridspace<T: Float + ToPrimitive>(start: T, end: T, step: T) -> Vec<T> {
@@ -19,7 +17,6 @@ pub fn gridspace<T: Float + ToPrimitive>(start: T, end: T, step: T) -> Vec<T> {
     }
     result
 }
-
 
 /// Given an unsorted slice, find its minimum and maximum values
 pub fn minmax<T: Float>(values: &[T]) -> (T, T) {
@@ -36,7 +33,6 @@ pub fn minmax<T: Float>(values: &[T]) -> (T, T) {
     }
     (min, max)
 }
-
 
 /// Trapezoid integration
 pub fn trapz<
@@ -83,6 +79,12 @@ pub trait MZGrid {
         stop_index - offset
     }
 
+    fn points_between_with_indices(&self, start_mz: f64, end_mz: f64) -> (usize, (usize, usize)) {
+        let offset = self.find_offset(start_mz);
+        let stop_index = self.find_offset(end_mz);
+        (stop_index - offset, (offset, stop_index))
+    }
+
     fn copy_mz_array(&self) -> Vec<f64> {
         let grid = self.mz_grid();
         grid.into()
@@ -100,6 +102,56 @@ pub struct ArrayPair<'lifespan> {
     pub max_mz: f64,
 }
 
+trait ArrayPairLike {
+    fn mz_array(&self) -> &[f64];
+
+    fn intensity_array(&self) -> &[f32];
+
+    /// Find the index nearest to `mz`
+    fn find(&self, mz: f64) -> usize {
+        let mz_array = self.mz_array();
+        match mz_array.binary_search_by(|x| x.partial_cmp(&mz).unwrap()) {
+            Ok(i) => i.min(mz_array.len().saturating_sub(1)),
+            Err(i) => i.min(mz_array.len().saturating_sub(1)),
+        }
+    }
+
+    /// Select the slice of the m/z and intensity arrays between `low` m/z and `high` m/z
+    /// returning a non-owning [`ArrayPair`]
+    fn find_between(&self, low: f64, high: f64) -> ArrayPair<'_> {
+        let i_low = self.find(low);
+        let i_high = self.find(high);
+        let mz_array = &self.mz_array()[i_low..i_high];
+        let intensity_array = &self.intensity_array()[i_low..i_high];
+        (mz_array, intensity_array).into()
+    }
+
+    fn len(&self) -> usize {
+        self.mz_array().len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    fn get(&self, i: usize) -> Option<(f64, f32)> {
+        if i >= self.len() {
+            None
+        } else {
+            Some((self.mz_array()[i], self.intensity_array()[i]))
+        }
+    }
+
+    fn borrow(&'_ self) -> ArrayPair<'_> {
+        ArrayPair::new(
+            Cow::Borrowed(&self.mz_array()),
+            Cow::Borrowed(&self.intensity_array()),
+        )
+    }
+
+    fn to_owned(self) -> ArrayPair<'static>;
+}
+
 impl<'lifespan> ArrayPair<'lifespan> {
     pub fn wrap(
         mz_array: &'lifespan [f64],
@@ -108,10 +160,7 @@ impl<'lifespan> ArrayPair<'lifespan> {
         Self::new(Cow::Borrowed(mz_array), Cow::Borrowed(intensity_array))
     }
 
-    pub fn new(
-        mz_array: Cow<'lifespan, [f64]>,
-        intensity_array: Cow<'lifespan, [f32]>,
-    ) -> ArrayPair<'lifespan> {
+    pub fn new(mz_array: Cow<'lifespan, [f64]>, intensity_array: Cow<'lifespan, [f32]>) -> Self {
         let min_mz = match mz_array.first() {
             Some(min_mz) => *min_mz,
             None => 0.0,
@@ -120,7 +169,7 @@ impl<'lifespan> ArrayPair<'lifespan> {
             Some(max_mz) => *max_mz,
             None => min_mz,
         };
-        ArrayPair {
+        Self {
             mz_array,
             intensity_array,
             min_mz,
@@ -185,9 +234,21 @@ impl<'lifespan> ArrayPair<'lifespan> {
     }
 }
 
-impl<'lifespan> From<(Cow<'lifespan, [f64]>, Cow<'lifespan, [f32]>)>
-    for ArrayPair<'lifespan>
-{
+impl<'lifespan> ArrayPairLike for ArrayPair<'lifespan> {
+    fn mz_array(&self) -> &[f64] {
+        &self.mz_array
+    }
+
+    fn intensity_array(&self) -> &[f32] {
+        &self.intensity_array
+    }
+
+    fn to_owned(self) -> ArrayPair<'static> {
+        self.to_owned()
+    }
+}
+
+impl<'lifespan> From<(Cow<'lifespan, [f64]>, Cow<'lifespan, [f32]>)> for ArrayPair<'lifespan> {
     fn from(pair: (Cow<'lifespan, [f64]>, Cow<'lifespan, [f32]>)) -> ArrayPair<'lifespan> {
         ArrayPair::new(pair.0, pair.1)
     }
@@ -204,5 +265,80 @@ impl<'lifespan> From<(Vec<f64>, Vec<f32>)> for ArrayPair<'lifespan> {
         let mz_array = Cow::Owned(pair.0);
         let intensity_array = Cow::Owned(pair.1);
         ArrayPair::new(mz_array, intensity_array)
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+/// Represent an m/z array and an intensity array with independent
+/// "borrowing" statuses using [`std::borrow::Cow`]. Adds a few helper
+/// methods.
+pub struct ArrayPairSplit<'a, 'b> {
+    pub mz_array: Cow<'a, [f64]>,
+    pub intensity_array: Cow<'b, [f32]>,
+    pub min_mz: f64,
+    pub max_mz: f64,
+}
+
+impl<'a, 'b> ArrayPairLike for ArrayPairSplit<'a, 'b> {
+    fn mz_array(&self) -> &[f64] {
+        &self.mz_array
+    }
+
+    fn intensity_array(&self) -> &[f32] {
+        &self.intensity_array
+    }
+
+    fn to_owned(self) -> ArrayPair<'static> {
+        ArrayPair::new(
+            Cow::Owned(self.mz_array.to_vec()),
+            Cow::Owned(self.intensity_array.to_vec()),
+        )
+    }
+}
+
+impl<'a, 'b> ArrayPairSplit<'a, 'b> {
+    pub fn wrap(
+        mz_array: &'a [f64],
+        intensity_array: &'b [f32],
+    ) -> ArrayPairSplit<'a, 'b> {
+        Self::new(Cow::Borrowed(mz_array), Cow::Borrowed(intensity_array))
+    }
+
+    pub fn new(mz_array: Cow<'a, [f64]>, intensity_array: Cow<'b, [f32]>) -> Self {
+        let min_mz = match mz_array.first() {
+            Some(min_mz) => *min_mz,
+            None => 0.0,
+        };
+        let max_mz = match mz_array.last() {
+            Some(max_mz) => *max_mz,
+            None => min_mz,
+        };
+        Self {
+            mz_array,
+            intensity_array,
+            min_mz,
+            max_mz,
+        }
+    }
+}
+
+
+impl<'a, 'b> From<(Cow<'a, [f64]>, Cow<'b, [f32]>)> for ArrayPairSplit<'a, 'b> {
+    fn from(pair: (Cow<'a, [f64]>, Cow<'b, [f32]>)) -> ArrayPairSplit<'a, 'b> {
+        ArrayPairSplit::new(pair.0, pair.1)
+    }
+}
+
+impl<'a, 'b> From<(&'a [f64], &'b [f32])> for ArrayPairSplit<'a, 'b> {
+    fn from(pair: (&'a [f64], &'b [f32])) -> ArrayPairSplit<'a, 'b> {
+        ArrayPairSplit::wrap(pair.0, pair.1)
+    }
+}
+
+impl<'lifespan> From<(Vec<f64>, Vec<f32>)> for ArrayPairSplit<'lifespan, 'lifespan> {
+    fn from(pair: (Vec<f64>, Vec<f32>)) -> ArrayPairSplit<'lifespan, 'lifespan> {
+        let mz_array = Cow::Owned(pair.0);
+        let intensity_array = Cow::Owned(pair.1);
+        ArrayPairSplit::new(mz_array, intensity_array)
     }
 }
