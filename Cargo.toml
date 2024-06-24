@@ -38,8 +38,6 @@ netlib = ["ndarray", "ndarray-linalg", "ndarray-linalg/netlib"]
 intel-mkl = ["ndarray", "ndarray-linalg", "ndarray-linalg/intel-mkl-static"]
 parallelism = ["rayon"]
 
-plotting = ["plotters"]
-
 [dependencies]
 log = ">=0.4.20,<1.0.0"
 num-traits = "0.2"
@@ -47,7 +45,6 @@ ndarray = { version = ">=0.15.6,<0.16", optional = true }
 ndarray-linalg = {version = "0.16.0", optional = true}
 cfg-if = "1.0.0"
 rayon = { version = ">=1.8.0,<2.0", optional = true }
-plotters = { version = "0.3.5", optional = true}
 mzpeaks = { version=">=0.13.0" }
 nalgebra = { version = "0.32.3", optional = true }
 thiserror = ">=1.0.50"

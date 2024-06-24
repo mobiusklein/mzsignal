@@ -88,9 +88,6 @@ pub mod peak_picker;
 pub mod peak_statistics;
 pub mod smooth;
 pub mod feature_mapping;
-
-#[cfg(feature="plotting")]
-pub mod plot;
 pub mod reprofile;
 pub mod search;
 pub mod text;
