@@ -272,7 +272,7 @@ cfg_if::cfg_if! {
             averager.interpolate_chunks_parallel(3 + n)
         }
     } else {
-        fn average_signal_inner(averager: &SignalAverager, n: usize) -> Vec<f32> {
+        fn average_signal_inner(averager: &SignalAverager, _n: usize) -> Vec<f32> {
             averager.interpolate()
         }
     }

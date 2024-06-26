@@ -102,9 +102,13 @@ pub struct ArrayPair<'lifespan> {
     pub max_mz: f64,
 }
 
-trait ArrayPairLike {
+
+/// A trait for abstracting over different flavors of [`ArrayPair`]-like types.
+pub trait ArrayPairLike {
+    /// Get the m/z array from the pair
     fn mz_array(&self) -> &[f64];
 
+    /// Get the intensity array from the pair
     fn intensity_array(&self) -> &[f32];
 
     /// Find the index nearest to `mz`
@@ -126,6 +130,10 @@ trait ArrayPairLike {
         (mz_array, intensity_array).into()
     }
 
+    /// The size of the arrays in the pair.
+    ///
+    /// Assumes that both m/z and intensity arrays are the
+    /// same size.
     fn len(&self) -> usize {
         self.mz_array().len()
     }
@@ -134,6 +142,7 @@ trait ArrayPairLike {
         self.len() == 0
     }
 
+    /// Get the (m/z, intensity) pair at index `i`
     fn get(&self, i: usize) -> Option<(f64, f32)> {
         if i >= self.len() {
             None
@@ -142,6 +151,7 @@ trait ArrayPairLike {
         }
     }
 
+    /// Borrow both arrays under a single lifetime as another [`ArrayPair`]
     fn borrow(&'_ self) -> ArrayPair<'_> {
         ArrayPair::new(
             Cow::Borrowed(&self.mz_array()),
@@ -149,10 +159,13 @@ trait ArrayPairLike {
         )
     }
 
+    /// Consume the object, returning an owning [`ArrayPair`], potentially cloning
+    /// either/both of the arrays if needed.
     fn to_owned(self) -> ArrayPair<'static>;
 }
 
 impl<'lifespan> ArrayPair<'lifespan> {
+    /// Wrap an existing pair of slices, as a borrowing constructor
     pub fn wrap(
         mz_array: &'lifespan [f64],
         intensity_array: &'lifespan [f32],
@@ -160,6 +173,7 @@ impl<'lifespan> ArrayPair<'lifespan> {
         Self::new(Cow::Borrowed(mz_array), Cow::Borrowed(intensity_array))
     }
 
+    /// Create a new [`ArrayPair`] from a set of arrays of indeterminate ownership.
     pub fn new(mz_array: Cow<'lifespan, [f64]>, intensity_array: Cow<'lifespan, [f32]>) -> Self {
         let min_mz = match mz_array.first() {
             Some(min_mz) => *min_mz,

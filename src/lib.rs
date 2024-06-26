@@ -79,7 +79,7 @@
 //! otherwise, the default `nalgebra` backend will be used.
 
 #![allow(unused_imports)]
-pub mod arrayops;
+pub(crate) mod arrayops;
 pub mod average;
 pub mod denoise;
 pub(crate) mod histogram;
@@ -95,7 +95,7 @@ pub mod text;
 #[cfg(test)]
 mod test_data;
 
-pub use crate::arrayops::ArrayPair;
+pub use crate::arrayops::{ArrayPair, ArrayPairSplit, ArrayPairLike, MZGrid, trapz, gridspace};
 pub use crate::peak::FittedPeak;
 pub use crate::histogram::{Histogram, percentile};
 pub use crate::peak_picker::{pick_peaks, PeakFitType, PeakPicker, PeakPickerError};
