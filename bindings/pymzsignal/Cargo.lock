@@ -128,9 +128,9 @@ checksum = "59058c9f26d536e00596c7dc01c5d9e88e88ec294b20a6cedc5b83ac6db804f1"
 
 [[package]]
 name = "mzpeaks"
-version = "0.16.0"
+version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dd69cc7a9d9741baf034c883713957fbc3399534ddee1974939d349c360f66b3"
+checksum = "2684b5ecb5a7200c0b987192a09af57b80a9fe58b144fed9cd12af9adff1d80f"
 dependencies = [
  "num-traits",
 ]
@@ -141,7 +141,7 @@ version = "0.16.0"
 dependencies = [
  "cfg-if",
  "log",
- "mzpeaks 0.16.0",
+ "mzpeaks 0.17.0",
  "nalgebra",
  "num-traits",
  "rayon",
