@@ -3,6 +3,5 @@ t:
 
 alias test := t
 
-
-changelog:
-    git cliff > CHANGELOG.md
+changelog tag:
+    git cliff -t {{tag}} -o CHANGELOG.md
