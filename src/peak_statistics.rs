@@ -568,8 +568,20 @@ pub fn lorentzian_fit(
 #[cfg(test)]
 mod test {
     use super::*;
+    use crate::gridspace;
     use crate::test_data::{read_1col, read_cols};
     use std::fs;
     use std::io;
     use std::io::prelude::*;
+
+
+
+    #[test]
+    fn test_empty_array_width() {
+        let x = gridspace(500.0, 501.0, 0.1);
+        let y = [0.0f32; 10];
+
+        let _ = fit_rising_side_width(&x, &y, 5, 0.0);
+        let _ = fit_falling_side_width(&x, &y, 5, 0.0);
+    }
 }
