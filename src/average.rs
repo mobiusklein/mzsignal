@@ -123,6 +123,9 @@ impl<'a, 'b: 'a> SignalAverager<'a> {
         assert!((stop_index - offset) == out.len());
 
         for block in self.array_pairs.iter() {
+            if block.is_empty() {
+                continue;
+            }
             for i in offset..stop_index {
                 let x = self.mz_grid[i];
                 let j = block.find(x);
@@ -457,7 +460,14 @@ impl<'a, 'lifespan: 'a> SegmentGridSignalAverager<'lifespan> {
         block: ArrayPair<'lifespan>,
     ) -> ArrayPairWithSegments<'lifespan> {
         let mut segments = Vec::default();
-
+        if block.is_empty() {
+            return ArrayPairWithSegments {
+                array_pair: block,
+                segments: segments,
+                intensity_array: Vec::new(),
+                time,
+            }
+        }
         let mut segment = Segment::default();
         let mut opened = false;
 
