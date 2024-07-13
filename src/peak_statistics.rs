@@ -277,9 +277,9 @@ pub fn fit_rising_side_width(
                 // NOTE: The regression is taken from Decon2LS which is a bit
                 // weird looking.
                 upper = x1;
-                let points = data_index - index + 1;
+                let points = data_index.saturating_sub(index) + 1;
                 if points >= 3 {
-                    let iv = (data_index - points)..=data_index;
+                    let iv = (data_index.saturating_sub(points))..=data_index;
                     if intensity_array[iv.clone()]
                         .windows(2)
                         .all(|w| (w[0] - w[1]).abs() < 1e-3)
@@ -344,9 +344,9 @@ pub fn fit_falling_side_width(
                 lower = x1 - (x1 - x2) * ((peak_half - y1) / (y2 - y1)) as f64;
             } else {
                 lower = x1;
-                let points = index - data_index + 1;
+                let points = index.saturating_sub(data_index) + 1;
                 if points >= 3 {
-                    let iv = (index - points)..=index;
+                    let iv = index.saturating_sub(points)..=index;
                     if intensity_array[iv.clone()]
                         .windows(2)
                         .all(|w| (w[0] - w[1]).abs() < 1e-3)
