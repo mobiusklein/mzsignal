@@ -74,7 +74,12 @@ impl<'transient, 'lifespan: 'transient> Window<'lifespan> {
                 mask_level = self.histogram.bin_count[i_count];
             }
         }
-        mask_level = (mask_level as f32 * (1.0 - threshold)) as usize;
+        mask_level = if 1.0 - threshold < 0.0 {
+            0
+        } else {
+            (mask_level as f32 * (1.0 - threshold)) as usize
+        };
+        // mask_level = (mask_level as f32 * (1.0 - threshold)) as usize;
         let mut total = 0.0;
         let mut weight = 0.0;
         for i_count in 0..n_count {
@@ -229,7 +234,7 @@ fn windowed_spectrum<'lifespan>(
                 chunk,
                 lo_i,
                 hi_i,
-                0,
+                1,
             ))
         }
         center_mz += window_size;

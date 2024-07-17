@@ -93,7 +93,7 @@ impl<T: Float + Default + FromPrimitive> Histogram<T> {
             }
 
             if !hit {
-                let j = self.bin_count.len() - 1;
+                let j = self.bin_count.len().saturating_sub(1);
                 self.bin_count[j] += 1;
             }
         }
