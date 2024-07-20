@@ -5,13 +5,13 @@ use std::io;
 use std::io::prelude::*;
 use std::path;
 
-use crate::arrayops::ArrayPair;
+use crate::arrayops::{ArrayPair, ArrayPairLike};
 
 /// A helper function to write an [`ArrayPair`] to a file on disk as plain text
 /// The written format is a tab-separated file denoting an m/z intensity pair,
 /// with one pair per line.
 /// See [`arrays_to_writer`]
-pub fn arrays_to_file<P: AsRef<path::Path>>(arrays: ArrayPair<'_>, path: P) -> io::Result<()> {
+pub fn arrays_to_file<P: AsRef<path::Path>, A: ArrayPairLike>(arrays: A, path: P) -> io::Result<()> {
     let file = fs::File::create(path)?;
     let mut writer = io::BufWriter::new(file);
     arrays_to_writer(arrays, &mut writer)
@@ -21,7 +21,7 @@ pub fn arrays_to_file<P: AsRef<path::Path>>(arrays: ArrayPair<'_>, path: P) -> i
 /// A helper function to write an [`ArrayPair`] to a [`Write`] as plain text
 /// The written format is a tab-separated file denoting an m/z intensity pair,
 /// with one pair per line.
-pub fn arrays_to_writer<W: io::Write>(arrays: ArrayPair<'_>, writer: &mut W) -> io::Result<()> {
+pub fn arrays_to_writer<W: io::Write, A: ArrayPairLike>(arrays: A, writer: &mut W) -> io::Result<()> {
     let n = arrays.len();
     for i in 0..n {
         let pt = arrays.get(i).unwrap();

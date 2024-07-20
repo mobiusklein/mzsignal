@@ -98,4 +98,4 @@ mod test_data;
 pub use crate::arrayops::{ArrayPair, ArrayPairSplit, ArrayPairLike, MZGrid, trapz, gridspace};
 pub use crate::peak::FittedPeak;
 pub use crate::histogram::{Histogram, percentile};
-pub use crate::peak_picker::{pick_peaks, PeakFitType, PeakPicker, PeakPickerError};
+pub use crate::peak_picker::{pick_peaks, PeakFitType, PeakPicker, PeakPickerError, PeakPickerBuilder};
