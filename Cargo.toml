@@ -33,6 +33,7 @@ default = [
     # "intel-mkl",
     "parallelism",
 ]
+
 openblas = ["ndarray", "ndarray-linalg", "ndarray-linalg/openblas-static"]
 netlib = ["ndarray", "ndarray-linalg", "ndarray-linalg/netlib"]
 intel-mkl = ["ndarray", "ndarray-linalg", "ndarray-linalg/intel-mkl-static"]
