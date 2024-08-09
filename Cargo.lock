@@ -855,9 +855,9 @@ dependencies = [
 
 [[package]]
 name = "mzpeaks"
-version = "0.17.0"
+version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2684b5ecb5a7200c0b987192a09af57b80a9fe58b144fed9cd12af9adff1d80f"
+checksum = "c7fb44a922404b374ad7362006f755dfe4145c2dd9ff71d6e8e060b9d290389b"
 dependencies = [
  "num-traits",
 ]
