@@ -1,6 +1,6 @@
 [package]
 name = "mzsignal"
-version = "0.19.0"
+version = "0.21.0"
 edition = "2021"
 
 keywords = [
@@ -33,6 +33,7 @@ default = [
     # "intel-mkl",
     "parallelism",
 ]
+
 openblas = ["ndarray", "ndarray-linalg", "ndarray-linalg/openblas-static"]
 netlib = ["ndarray", "ndarray-linalg", "ndarray-linalg/netlib"]
 intel-mkl = ["ndarray", "ndarray-linalg", "ndarray-linalg/intel-mkl-static"]
@@ -45,7 +46,7 @@ ndarray = { version = ">=0.15.6,<0.16", optional = true }
 ndarray-linalg = {version = "0.16.0", optional = true}
 cfg-if = "1.0.0"
 rayon = { version = ">=1.8.0,<2.0", optional = true }
-mzpeaks = { version=">=0.18.0,<1.0.0" }
+mzpeaks = { version=">=0.19.0,<1.0.0" }
 nalgebra = { version = "0.32.3", optional = true }
 thiserror = ">=1.0.50"
 argmin = "0.10.0"

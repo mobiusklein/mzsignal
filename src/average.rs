@@ -716,7 +716,7 @@ mod test {
 
             // log::info!("Reprofiling");
             let peak_models =
-                reprofiler.build_peak_shape_models(&peaks, crate::reprofile::PeakShape::Gaussian);
+                reprofiler.build_peak_shape_models(&peaks.as_slice(), crate::reprofile::PeakShape::Gaussian);
             let block = reprofiler.reprofile_from_models(&peak_models);
 
             averager.push(t, block);
