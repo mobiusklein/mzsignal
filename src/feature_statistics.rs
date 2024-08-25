@@ -41,21 +41,29 @@ impl Gaussian {
     }
 
     fn gaussian_dsigma(&self, x: f64) -> f64 {
-        let a = self.gaussian(x);
-        let b = (x - self.mu).powi(2) / self.sigma.powi(3);
-        let c = (b - 1.0 / self.sigma);
-        a * c
+        let a = -(2.0f64.sqrt())
+            * self.amplitude
+            * (-(-self.mu + x).powi(2) / (2.0 * self.sigma.powi(2))).exp();
+        let b = 2.0f64.sqrt()
+            * self.amplitude
+            * (-self.mu + x).powi(2)
+            * ((-(-self.mu + x).powi(2)) / (2.0 * self.sigma.powi(2))).exp()
+            / (2.0 * PI.sqrt() * self.sigma.powi(4));
+        let c = a + b;
+        c
     }
 
     fn gaussian_dmu(&self, x: f64) -> f64 {
-        let b = (x - self.mu).powi(2) / self.sigma.powi(2);
-        let a = self.gaussian(x);
+        let a = -(2.0f64.sqrt()) * self.amplitude * (2.0 * self.mu - 2.0 * x);
+        let b = ((-(-self.mu + x).powi(2)) / (2.0 * self.sigma.powi(2))).exp() / (4.0 * PI.sqrt() * self.sigma.powi(3));
+        // let b = (x - self.mu).powi(2) / self.sigma.powi(2);
+        // let a = self.gaussian(x);
         a * b
     }
 
     fn gaussian_damplitude(&self, x: f64) -> f64 {
-        1.0 / (2.0 * self.sigma * PI).sqrt()
-            * (-0.5 * (x - self.mu).powi(2) / self.sigma.powi(2)).exp()
+        2.0f64.sqrt() * ((-(-self.mu + x).powi(2)) / (2.0 * self.sigma.powi(2))).exp()
+            / (2.0 * PI.sqrt() * self.sigma)
     }
 
     fn from_slice(data: &[f64]) -> Self {
@@ -200,62 +208,18 @@ mod test {
             7.34693878, 7.55102041, 7.75510204, 7.95918367, 8.16326531, 8.36734694, 8.57142857,
             8.7755102, 8.97959184, 9.18367347, 9.3877551, 9.59183673, 9.79591837, 10.,
         ];
-        let intensity = vec![
-            5.14092999,
-            8.01643116,
-            12.27103812,
-            18.43921389,
-            27.19971529,
-            39.38648037,
-            55.98747067,
-            78.12596265,
-            107.01897193,
-            143.90869234,
-            189.96523898,
-            246.16262192,
-            313.13451423,
-            391.02149165,
-            479.32620916,
-            576.79645713,
-            681.35720233,
-            790.11076167,
-            899.4188028,
-            1005.07115014,
-            1102.53531942,
-            1187.26885115,
-            1255.06580235,
-            1302.40117016,
-            1326.73418216,
-            1326.73418216,
-            1302.40117016,
-            1255.06580235,
-            1187.26885115,
-            1102.53531942,
-            1005.07115014,
-            899.4188028,
-            790.11076167,
-            681.35720233,
-            576.79645713,
-            479.32620916,
-            391.02149165,
-            313.13451423,
-            246.16262192,
-            189.96523898,
-            143.90869234,
-            107.01897193,
-            78.12596265,
-            55.98747067,
-            39.38648037,
-            27.19971529,
-            18.43921389,
-            12.27103812,
-            8.01643116,
-            5.14092999,
-        ];
 
         let mu = 5.0;
         let sigma = 1.5;
         let amplitude = 5000.0;
+
+        let ref_model = Gaussian {
+            mu,
+            sigma,
+            amplitude,
+        };
+
+        let intensity: Vec<_> = time.iter().map(|t| ref_model.gaussian(*t) as f32).collect();
 
         let measures = PeakFitArgs::new(time, intensity);
         let problem = GaussianPeakShapeProblem::new(measures);
@@ -266,7 +230,8 @@ mod test {
         let res = Executor::new(problem, solver)
             .configure(|state| state.param(initial).max_iters(10))
             .add_observer(Printer {}, ObserverMode::Always)
-            .run().unwrap();
+            .run()
+            .unwrap();
         eprintln!("Best solution: {:?}", res.state.best_param);
     }
 }
