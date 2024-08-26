@@ -42,6 +42,43 @@ trait MZInterpolator: MZGrid {
     }
 }
 
+
+struct MonotonicBlockSearcher<'a> {
+    data: &'a ArrayPair<'a>,
+    next_value: Option<f64>,
+    last_index: usize,
+}
+
+impl<'a> MonotonicBlockSearcher<'a> {
+    fn new(data: &'a ArrayPair<'a>) -> Self {
+        Self {
+            data,
+            next_value: None,
+            last_index: 0,
+        }
+    }
+
+    fn find_update(&mut self, mz: f64) -> usize {
+        let i = self.data.find(mz);
+        self.last_index = i;
+        self.next_value = self.data.mz_array.get(i).copied();
+        i
+    }
+
+    fn find(&mut self, mz: f64) -> usize {
+        if let Some(next_value) = self.next_value {
+            if mz < next_value {
+                self.last_index
+            } else {
+                self.find_update(mz)
+            }
+        } else {
+            self.find_update(mz)
+        }
+    }
+}
+
+
 /// A linear interpolation spectrum intensity averager over a shared m/z axis.
 #[derive(Debug, Default, Clone)]
 pub struct SignalAverager<'lifespan> {
@@ -108,6 +145,7 @@ impl<'a, 'b: 'a> SignalAverager<'a> {
         inten_j: f64,
         inten_j1: f64,
     ) -> f64 {
+
         ((inten_j * (mz_j1 - mz_x)) + (inten_j1 * (mz_x - mz_j))) / (mz_j1 - mz_j)
     }
 
@@ -122,35 +160,46 @@ impl<'a, 'b: 'a> SignalAverager<'a> {
         assert!(stop_index <= grid_size);
         assert!((stop_index - offset) == out.len());
 
+        let grid_slice = &self.mz_grid[offset..stop_index];
+
         for block in self.array_pairs.iter() {
             if block.is_empty() {
                 continue;
             }
-            for i in offset..stop_index {
-                let x = self.mz_grid[i];
-                let j = block.find(x);
-                let mz_j = block.mz_array[j];
+            let mut block_searcher = MonotonicBlockSearcher::new(&block);
 
-                let (mz_j, inten_j, mz_j1, inten_j1) = if (mz_j <= x) && ((j + 1) < block.len()) {
+            let block_n = block.len();
+            let block_mz_array = block.mz_array.as_ref();
+            let block_intensity_array = block.intensity_array.as_ref();
+            assert_eq!(block_mz_array.len(), block_n);
+            assert_eq!(block_intensity_array.len(), block_n);
+
+
+
+            for (x, o) in grid_slice.iter().copied().zip(out.iter_mut()) {
+                let j = block_searcher.find(x);
+                let mz_j = block_mz_array[j];
+
+                let (mz_j, inten_j, mz_j1, inten_j1) = if (mz_j <= x) && ((j + 1) < block_n) {
                     (
                         mz_j,
-                        block.intensity_array[j],
-                        block.mz_array[j + 1],
-                        block.intensity_array[j + 1],
+                        block_intensity_array[j],
+                        block_mz_array[j + 1],
+                        block_intensity_array[j + 1],
                     )
                 } else if mz_j > x && j > 0 {
                     (
-                        block.mz_array[j - 1],
-                        block.intensity_array[j - 1],
-                        block.mz_array[j],
-                        block.intensity_array[j],
+                        block_mz_array[j - 1],
+                        block_intensity_array[j - 1],
+                        block_mz_array[j],
+                        block_intensity_array[j],
                     )
                 } else {
                     continue;
                 };
                 let interp =
                     self.interpolate_point(mz_j, x, mz_j1, inten_j as f64, inten_j1 as f64);
-                out[i - offset] += interp as f32;
+                *o += interp as f32;
             }
         }
         if self.array_pairs.len() > 1 {
@@ -301,6 +350,7 @@ pub fn average_signal<'lifespan, 'owned: 'lifespan>(
     ArrayPair::new(Cow::Owned(averager.copy_mz_array()), Cow::Owned(signal))
 }
 
+#[inline(never)]
 pub fn rebin<'transient, 'lifespan: 'transient>(
     mz_array: &'lifespan [f64],
     intensity_array: &'lifespan [f32],
@@ -476,8 +526,9 @@ impl<'a, 'lifespan: 'a> SegmentGridSignalAverager<'lifespan> {
         let mut intensity_axis_ = self.create_intensity_array();
         let intensity_axis = &mut intensity_axis_[0..n];
 
+        let mut block_searcher = MonotonicBlockSearcher::new(&block);
         for (i, x) in self.mz_grid.iter().copied().enumerate() {
-            let j = block.find(x);
+            let j = block_searcher.find(x);
             let mz_j = block.mz_array[j];
 
             let (mz_j, inten_j, mz_j1, inten_j1) = if (mz_j <= x) && ((j + 1) < block.len()) {
