@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::ops::Index;
 
+use mzpeaks::prelude::PeakCollectionMut;
 use ndarray::prelude::Dim;
 use pyo3::exceptions::{PyException, PyIndexError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
@@ -138,14 +139,6 @@ impl Index<usize> for PyPeakSet {
 }
 
 impl PeakCollection<PyFittedPeak, MZ> for PyPeakSet {
-    fn push(&mut self, peak: PyFittedPeak) -> mzpeaks::peak_set::OrderUpdateEvent {
-        self.0.push(peak)
-    }
-
-    fn sort(&mut self) {
-        self.0.sort()
-    }
-
     fn len(&self) -> usize {
         self.0.len()
     }
@@ -160,6 +153,20 @@ impl PeakCollection<PyFittedPeak, MZ> for PyPeakSet {
 
     fn search_by(&self, query: f64) -> Result<usize, usize> {
         self.0.search_by(query)
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &PyFittedPeak> {
+        self.0.iter()
+    }
+}
+
+impl PeakCollectionMut<PyFittedPeak, MZ> for PyPeakSet {
+    fn push(&mut self, peak: PyFittedPeak) -> mzpeaks::peak_set::OrderUpdateEvent {
+        self.0.push(peak)
+    }
+
+    fn sort(&mut self) {
+        self.0.sort()
     }
 }
 

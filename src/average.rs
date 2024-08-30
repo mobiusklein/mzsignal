@@ -4,6 +4,7 @@
 use std::borrow::Cow;
 use std::cmp;
 use std::collections::VecDeque;
+use std::iter::Enumerate;
 use std::ops::{Add, Index};
 
 #[cfg(feature = "parallelism")]
@@ -15,11 +16,11 @@ use cfg_if;
 
 use mzpeaks::coordinate::{CoordinateLike, Time};
 
-use crate::arrayops::{gridspace, ArrayPair, ArrayPairSplit, MZGrid};
+use crate::arrayops::{gridspace, ArrayPair, ArrayPairIter, ArrayPairSplit, MZGrid, ArrayPairLike};
 use crate::search;
 use num_traits::{Float, Saturating, ToPrimitive};
 
-trait MZInterpolator: MZGrid {
+trait MZInterpolator {
     /// Linear interpolation between two control points to find the intensity
     /// at a third point between them.
     ///
@@ -38,7 +39,13 @@ trait MZInterpolator: MZGrid {
         inten_j: f64,
         inten_j1: f64,
     ) -> f64 {
-        ((inten_j * (mz_j1 - mz_x)) + (inten_j1 * (mz_x - mz_j))) / (mz_j1 - mz_j)
+        // ((inten_j * (mz_j1 - mz_x)) + (inten_j1 * (mz_x - mz_j))) / (mz_j1 - mz_j)
+        let step_a = mz_j1 - mz_x;
+        let step_b = mz_x - mz_j;
+        let step_ab = mz_j1 - mz_j;
+        let vb = inten_j1 * step_b;
+        let vab = inten_j.mul_add(step_a, vb);
+        vab / step_ab
     }
 }
 
@@ -77,6 +84,95 @@ impl<'a> MonotonicBlockSearcher<'a> {
         }
     }
 }
+
+
+#[allow(unused)]
+struct MonotonicBlockedIterator<'a, 'b: 'a, T: Iterator<Item=(f64, &'b mut f32)>> {
+    block: std::iter::Enumerate<ArrayPairIter<'a>>,
+    last_value: (usize, (f64, f64)),
+    current_value: (usize, (f64, f64)),
+    next_value: Option<(usize, (f64, f64))>,
+    block_n: usize,
+    it: T
+}
+
+impl<'a, 'b, T: Iterator<Item=(f64, &'b mut f32)>> MZInterpolator for MonotonicBlockedIterator<'a, 'b, T> {}
+
+impl<'a, 'b: 'a, T: Iterator<Item=(f64, &'b mut f32)>> MonotonicBlockedIterator<'a, 'b, T> {
+    fn new(block: &'a ArrayPair<'a>, it: T) -> Self {
+        let mut source = block.iter().enumerate();
+        let current_value = source.next().map(|(i, (x, y))| (i, (x, y as f64))).unwrap();
+        let next_value = source.next().map(|(i, (x, y))| (i, (x, y as f64)));
+        let block_n = block.len();
+        Self {
+            block: source,
+            last_value: current_value,
+            current_value,
+            next_value,
+            block_n,
+            it
+        }
+    }
+
+    fn next_value_from_source(&mut self) -> Option<(usize, (f64, f64))> {
+        self.block.next().map(|(i, (x, y))| (i, (x, y as f64)))
+    }
+
+    fn step(&mut self) -> Option<(f64, &'b mut f32, (usize, (f64, f64)))> {
+        if let Some((x, o)) = self.it.next() {
+            if let Some((vi, (vmz, vint))) = self.next_value.as_ref() {
+                if x >= *vmz {
+                    self.last_value = self.current_value;
+                    self.current_value = (*vi, (*vmz, *vint));
+                    self.next_value = self.next_value_from_source();
+                }
+                Some((x, o, self.current_value))
+            } else {
+                Some((x, o, self.current_value))
+            }
+        } else {
+            None
+        }
+    }
+
+    fn interpolant_step(&mut self) -> Option<(f64, &'b mut f32)> {
+        if let Some((mz, o, (_, (mz_j, inten_j)))) = self.step() {
+            if mz_j <= mz {
+                if let Some((_, (mz_j1, inten_j1))) = self.next_value {
+
+                    let inten = self.interpolate_point(mz_j, mz, mz_j1, inten_j, inten_j1);
+                    *o += inten as f32;
+                    Some((mz, o))
+                } else {
+                    let (mz_j1, inten_j1) = (mz_j, inten_j);
+                    let (_, (mz_j, inten_j)) = self.last_value;
+
+                    let inten = self.interpolate_point(mz_j, mz, mz_j1, inten_j, inten_j1);
+                    *o += inten as f32;
+                    Some((mz, o))
+                }
+            } else {
+                let (mz_j1, inten_j1) = (mz_j, inten_j);
+                let (_, (mz_j, inten_j)) = self.last_value;
+
+                let inten = self.interpolate_point(mz_j, mz, mz_j1, inten_j, inten_j1);
+                *o += inten as f32;
+                Some((mz, o))
+            }
+        } else {
+            None
+        }
+    }
+}
+
+impl<'a, 'b: 'a, T: Iterator<Item=(f64, &'b mut f32)>> Iterator for MonotonicBlockedIterator<'a, 'b, T> {
+    type Item = (f64, &'b mut f32);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.interpolant_step()
+    }
+}
+
 
 
 /// A linear interpolation spectrum intensity averager over a shared m/z axis.
@@ -127,34 +223,40 @@ impl<'a, 'b: 'a> SignalAverager<'a> {
         self.array_pairs.is_empty()
     }
 
-    /// Linear interpolation between two control points to find the intensity
-    /// at a third point between them.
-    ///
-    /// # Arguments
-    /// - `mz_j` - The first control point's m/z
-    /// - `mz_x` - The interpolated m/z
-    /// - `mz_j1` - The second control point's m/z
-    /// - `inten_j` - The first control point's intensity
-    /// - `inten_j1` - The second control point's intensity
-    #[inline]
-    pub fn interpolate_point(
-        &self,
-        mz_j: f64,
-        mz_x: f64,
-        mz_j1: f64,
-        inten_j: f64,
-        inten_j1: f64,
-    ) -> f64 {
-
-        ((inten_j * (mz_j1 - mz_x)) + (inten_j1 * (mz_x - mz_j))) / (mz_j1 - mz_j)
-    }
-
     /// A linear interpolation across all spectra between `start_mz` and `end_mz`, with
     /// their intensities written into `out`.
     pub fn interpolate_into(&self, out: &mut [f32], start_mz: f64, end_mz: f64) -> usize {
         let offset = self.find_offset(start_mz);
         let stop_index = self.find_offset(end_mz);
-        // debug_assert!(stop_index - offset == out.len());
+
+        let grid_size = self.mz_grid.len();
+        assert!(offset < grid_size || grid_size == 0);
+        assert!(stop_index <= grid_size);
+        assert!((stop_index - offset) == out.len());
+
+        let grid_slice = &self.mz_grid[offset..stop_index];
+        for block in self.array_pairs.iter() {
+            if block.is_empty() {
+                continue;
+            }
+
+            let start_idx = block.find(start_mz).saturating_sub(1);
+            let block_slice = block.slice(start_idx, block.len());
+
+            let it = MonotonicBlockedIterator::new(&block_slice, grid_slice.iter().copied().zip(out.iter_mut()));
+            let _traveled = it.count();
+        }
+        if self.array_pairs.len() > 1 {
+            let normalizer = self.array_pairs.len() as f32;
+            out.iter_mut().for_each(|y| *y /= normalizer);
+        }
+        stop_index - offset
+    }
+
+    pub(crate) fn interpolate_into_idx(&self, out: &mut [f32], start_mz: f64, end_mz: f64) -> usize {
+        let offset = self.find_offset(start_mz);
+        let stop_index = self.find_offset(end_mz);
+
         let grid_size = self.mz_grid.len();
         assert!(offset < grid_size || grid_size == 0);
         assert!(stop_index <= grid_size);
@@ -167,30 +269,30 @@ impl<'a, 'b: 'a> SignalAverager<'a> {
                 continue;
             }
             let mut block_searcher = MonotonicBlockSearcher::new(&block);
-
             let block_n = block.len();
             let block_mz_array = block.mz_array.as_ref();
             let block_intensity_array = block.intensity_array.as_ref();
             assert_eq!(block_mz_array.len(), block_n);
             assert_eq!(block_intensity_array.len(), block_n);
 
-
-
             for (x, o) in grid_slice.iter().copied().zip(out.iter_mut()) {
                 let j = block_searcher.find(x);
+                assert!(j < block_n);
                 let mz_j = block_mz_array[j];
 
-                let (mz_j, inten_j, mz_j1, inten_j1) = if (mz_j <= x) && ((j + 1) < block_n) {
+                let js1 = j + 1;
+                let (mz_j, inten_j, mz_j1, inten_j1) = if (mz_j <= x) && (js1 < block_n) {
                     (
                         mz_j,
                         block_intensity_array[j],
-                        block_mz_array[j + 1],
-                        block_intensity_array[j + 1],
+                        block_mz_array[js1],
+                        block_intensity_array[js1],
                     )
                 } else if mz_j > x && j > 0 {
+                    let js1 = j - 1;
                     (
-                        block_mz_array[j - 1],
-                        block_intensity_array[j - 1],
+                        block_mz_array[js1],
+                        block_intensity_array[js1],
                         block_mz_array[j],
                         block_intensity_array[j],
                     )
@@ -294,6 +396,14 @@ impl<'a, 'b: 'a> SignalAverager<'a> {
         let mut result = self.create_intensity_array_of_size(n_points);
         self.interpolate_into(&mut result, mz_start, mz_end);
         (result, (start, end))
+    }
+
+    #[allow(unused)]
+    #[deprecated]
+    pub fn interpolate_idx(&'a self) -> Vec<f32> {
+        let mut result = self.create_intensity_array();
+        self.interpolate_into_idx(&mut result, self.mz_start, self.mz_end);
+        result
     }
 
     /// Allocate a new intensity array, [`interpolate_into`](SignalAverager::interpolate_into) it, and return it.
@@ -673,12 +783,15 @@ mod test {
     use crate::peak_picker::PeakPicker;
     use crate::test_data::{X, Y};
     use crate::FittedPeak;
+    #[allow(unused)]
+    use crate::text;
 
     #[test]
     fn test_rebin_one() {
         let mut averager = SignalAverager::new(X[0], X[X.len() - 1], 0.00001);
         averager.push(ArrayPair::wrap(&X, &Y));
         let yhat = averager.interpolate();
+        // text::arrays_to_file(ArrayPair::wrap(&averager.mz_grid, &yhat), "interpolate_iter.txt").unwrap();
         let picker = PeakPicker::default();
         let mut acc = Vec::new();
         picker
@@ -697,6 +810,7 @@ mod test {
         let mut averager = SignalAverager::new(X[0], X[X.len() - 1], 0.00001);
         averager.push(ArrayPair::wrap(&X, &Y));
         let yhat = averager.interpolate_chunks(3);
+        // text::arrays_to_file(ArrayPair::wrap(&averager.mz_grid, &yhat), "chunked_iter.txt").unwrap();
         let picker = PeakPicker::default();
         let mut acc = Vec::new();
         picker
