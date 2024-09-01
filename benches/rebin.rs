@@ -4,7 +4,7 @@ use mzsignal::{average, text, ArrayPair};
 
 
 fn direct_indexing(averager: &average::SignalAverager) -> f32 {
-    let yhat = averager.interpolate_idx();
+    let yhat = averager.interpolate();
     black_box(yhat.into_iter().sum())
 }
 

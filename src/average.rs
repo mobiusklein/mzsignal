@@ -225,7 +225,7 @@ impl<'a, 'b: 'a> SignalAverager<'a> {
 
     /// A linear interpolation across all spectra between `start_mz` and `end_mz`, with
     /// their intensities written into `out`.
-    pub fn interpolate_into(&self, out: &mut [f32], start_mz: f64, end_mz: f64) -> usize {
+    pub(crate) fn interpolate_into_iter(&self, out: &mut [f32], start_mz: f64, end_mz: f64) -> usize {
         let offset = self.find_offset(start_mz);
         let stop_index = self.find_offset(end_mz);
 
@@ -331,7 +331,7 @@ impl<'a, 'b: 'a> SignalAverager<'a> {
                 )
             };
             let mut sub = self.create_intensity_array_of_size(size);
-            self.interpolate_into(&mut sub, start_mz, end_mz);
+            self.interpolate_into_iter(&mut sub, start_mz, end_mz);
             (result[offset..offset + size]).copy_from_slice(&sub);
         }
         result
@@ -359,7 +359,7 @@ impl<'a, 'b: 'a> SignalAverager<'a> {
                 )
             };
             let mut sub = self.create_intensity_array_of_size(size);
-            self.interpolate_into(&mut sub, start_mz, end_mz);
+            self.interpolate_into_iter(&mut sub, start_mz, end_mz);
 
             let mut out = locked_result.lock().unwrap();
             (out[offset..offset + size]).copy_from_slice(&sub);
@@ -386,7 +386,7 @@ impl<'a, 'b: 'a> SignalAverager<'a> {
                 let start_mz = mz_chunk.first().unwrap();
                 // The + 1e-6 is just a gentle push to get interpolate_into to roll over to the last position in the chunk
                 let end_mz = mz_chunk.last().unwrap() + 1e-6;
-                self.interpolate_into(intensity_chunk, *start_mz, end_mz);
+                self.interpolate_into_iter(intensity_chunk, *start_mz, end_mz);
             });
         result
     }
@@ -394,22 +394,21 @@ impl<'a, 'b: 'a> SignalAverager<'a> {
     pub fn interpolate_between(&'a self, mz_start: f64, mz_end: f64) -> (Vec<f32>, (usize, usize)) {
         let (n_points, (start, end)) = self.points_between_with_indices(mz_start, mz_end);
         let mut result = self.create_intensity_array_of_size(n_points);
-        self.interpolate_into(&mut result, mz_start, mz_end);
+        self.interpolate_into_iter(&mut result, mz_start, mz_end);
         (result, (start, end))
-    }
-
-    #[allow(unused)]
-    #[deprecated]
-    pub fn interpolate_idx(&'a self) -> Vec<f32> {
-        let mut result = self.create_intensity_array();
-        self.interpolate_into_idx(&mut result, self.mz_start, self.mz_end);
-        result
     }
 
     /// Allocate a new intensity array, [`interpolate_into`](SignalAverager::interpolate_into) it, and return it.
     pub fn interpolate(&'a self) -> Vec<f32> {
         let mut result = self.create_intensity_array();
-        self.interpolate_into(&mut result, self.mz_start, self.mz_end);
+        self.interpolate_into_idx(&mut result, self.mz_start, self.mz_end);
+        result
+    }
+
+    #[allow(unused)]
+    pub fn interpolate_iter(&'a self) -> Vec<f32> {
+        let mut result = self.create_intensity_array();
+        self.interpolate_into_iter(&mut result, self.mz_start, self.mz_end);
         result
     }
 }
