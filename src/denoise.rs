@@ -46,12 +46,13 @@ impl<'transient, 'lifespan: 'transient> Window<'lifespan> {
     pub fn deduct_intensity(&'transient mut self, value: f32) {
         let n = self.intensity_array.len();
         let mut total = 0.0;
-        for i in 0..n {
-            self.intensity_array[i] -= value;
-            if self.intensity_array[i] < 0.0 {
-                self.intensity_array[i] = 0.0;
+
+        for i in self.intensity_array.iter_mut() {
+            *i -= value;
+            if *i < 0.0 {
+                *i = 0.0;
             }
-            total += self.intensity_array[i];
+            total += *i;
         }
         self.mean_intensity = total / n as f32;
     }

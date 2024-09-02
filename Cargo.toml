@@ -18,6 +18,8 @@ license = "Apache-2.0"
 repository = "https://github.com/mobiusklein/mzsignal"
 documentation = "https://docs.rs/mzsignal"
 
+exclude = ["test/"]
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
@@ -32,12 +34,15 @@ default = [
     "nalgebra",
     # "intel-mkl",
     "parallelism",
+    "avx"
 ]
 
 openblas = ["ndarray", "ndarray-linalg", "ndarray-linalg/openblas-static"]
 netlib = ["ndarray", "ndarray-linalg", "ndarray-linalg/netlib"]
 intel-mkl = ["ndarray", "ndarray-linalg", "ndarray-linalg/intel-mkl-static"]
 parallelism = ["rayon"]
+
+avx = []
 
 [dependencies]
 log = ">=0.4.20,<1.0.0"

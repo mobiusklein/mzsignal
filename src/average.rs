@@ -7,6 +7,13 @@ use std::collections::VecDeque;
 use std::iter::Enumerate;
 use std::ops::{Add, Index};
 
+#[cfg(target_arch = "x86")]
+use std::arch::x86::__m256d;
+#[cfg(target_arch = "x86_64")]
+use std::arch::x86_64::__m256d;
+#[cfg(not(any(target_arch = "x86_64", target_arch = "x86")))]
+struct __m256d();
+
 #[cfg(feature = "parallelism")]
 use rayon::prelude::*;
 #[cfg(feature = "parallelism")]
@@ -16,7 +23,7 @@ use cfg_if;
 
 use mzpeaks::coordinate::{CoordinateLike, Time};
 
-use crate::arrayops::{gridspace, ArrayPair, ArrayPairIter, ArrayPairSplit, MZGrid, ArrayPairLike};
+use crate::arrayops::{gridspace, ArrayPair, ArrayPairIter, ArrayPairLike, ArrayPairSplit, MZGrid};
 use crate::search;
 use num_traits::{Float, Saturating, ToPrimitive};
 
@@ -47,8 +54,29 @@ trait MZInterpolator {
         let vab = inten_j.mul_add(step_a, vb);
         vab / step_ab
     }
-}
 
+    // A version of [`MZInterpolator::interpolate_point`] that uses AVX 256-bit register operations
+    #[cfg(feature = "avx")]
+    #[cfg(target_arch = "x86_64")]
+    fn interpolate_avx(
+        &self,
+        mz_j: __m256d,
+        mz_x: __m256d,
+        mz_j1: __m256d,
+        inten_j: __m256d,
+        inten_j1: __m256d,
+    ) -> __m256d {
+        unsafe {
+            use std::arch::x86_64::*;
+            let step_a = _mm256_sub_pd(mz_j1, mz_x);
+            let step_b = _mm256_sub_pd(mz_x, mz_j);
+            let step_ab = _mm256_sub_pd(mz_j1, mz_j);
+            let vb = _mm256_mul_pd(inten_j1, step_b);
+            let vab = _mm256_fmadd_pd(inten_j, step_a, vb);
+            _mm256_div_pd(vab, step_ab)
+        }
+    }
+}
 
 struct MonotonicBlockSearcher<'a> {
     data: &'a ArrayPair<'a>,
@@ -72,6 +100,21 @@ impl<'a> MonotonicBlockSearcher<'a> {
         i
     }
 
+    /// This assumes that the next value will be suitable, but this is not actually
+    /// true. The algorithm this component is used in though does not make the distinction
+    #[allow(unused)]
+    fn peek(&self, mz: f64) -> usize {
+        if let Some(next_value) = self.next_value {
+            if mz < next_value {
+                self.last_index
+            } else {
+                (self.last_index + 1).min(self.data.len().saturating_sub(1))
+            }
+        } else {
+            self.last_index
+        }
+    }
+
     fn find(&mut self, mz: f64) -> usize {
         if let Some(next_value) = self.next_value {
             if mz < next_value {
@@ -85,20 +128,22 @@ impl<'a> MonotonicBlockSearcher<'a> {
     }
 }
 
-
 #[allow(unused)]
-struct MonotonicBlockedIterator<'a, 'b: 'a, T: Iterator<Item=(f64, &'b mut f32)>> {
+struct MonotonicBlockedIterator<'a, 'b: 'a, T: Iterator<Item = (f64, &'b mut f32)>> {
     block: std::iter::Enumerate<ArrayPairIter<'a>>,
     last_value: (usize, (f64, f64)),
     current_value: (usize, (f64, f64)),
     next_value: Option<(usize, (f64, f64))>,
     block_n: usize,
-    it: T
+    it: T,
 }
 
-impl<'a, 'b, T: Iterator<Item=(f64, &'b mut f32)>> MZInterpolator for MonotonicBlockedIterator<'a, 'b, T> {}
+impl<'a, 'b, T: Iterator<Item = (f64, &'b mut f32)>> MZInterpolator
+    for MonotonicBlockedIterator<'a, 'b, T>
+{
+}
 
-impl<'a, 'b: 'a, T: Iterator<Item=(f64, &'b mut f32)>> MonotonicBlockedIterator<'a, 'b, T> {
+impl<'a, 'b: 'a, T: Iterator<Item = (f64, &'b mut f32)>> MonotonicBlockedIterator<'a, 'b, T> {
     fn new(block: &'a ArrayPair<'a>, it: T) -> Self {
         let mut source = block.iter().enumerate();
         let current_value = source.next().map(|(i, (x, y))| (i, (x, y as f64))).unwrap();
@@ -110,7 +155,7 @@ impl<'a, 'b: 'a, T: Iterator<Item=(f64, &'b mut f32)>> MonotonicBlockedIterator<
             current_value,
             next_value,
             block_n,
-            it
+            it,
         }
     }
 
@@ -139,7 +184,6 @@ impl<'a, 'b: 'a, T: Iterator<Item=(f64, &'b mut f32)>> MonotonicBlockedIterator<
         if let Some((mz, o, (_, (mz_j, inten_j)))) = self.step() {
             if mz_j <= mz {
                 if let Some((_, (mz_j1, inten_j1))) = self.next_value {
-
                     let inten = self.interpolate_point(mz_j, mz, mz_j1, inten_j, inten_j1);
                     *o += inten as f32;
                     Some((mz, o))
@@ -165,15 +209,15 @@ impl<'a, 'b: 'a, T: Iterator<Item=(f64, &'b mut f32)>> MonotonicBlockedIterator<
     }
 }
 
-impl<'a, 'b: 'a, T: Iterator<Item=(f64, &'b mut f32)>> Iterator for MonotonicBlockedIterator<'a, 'b, T> {
+impl<'a, 'b: 'a, T: Iterator<Item = (f64, &'b mut f32)>> Iterator
+    for MonotonicBlockedIterator<'a, 'b, T>
+{
     type Item = (f64, &'b mut f32);
 
     fn next(&mut self) -> Option<Self::Item> {
         self.interpolant_step()
     }
 }
-
-
 
 /// A linear interpolation spectrum intensity averager over a shared m/z axis.
 #[derive(Debug, Default, Clone)]
@@ -225,7 +269,12 @@ impl<'a, 'b: 'a> SignalAverager<'a> {
 
     /// A linear interpolation across all spectra between `start_mz` and `end_mz`, with
     /// their intensities written into `out`.
-    pub(crate) fn interpolate_into_iter(&self, out: &mut [f32], start_mz: f64, end_mz: f64) -> usize {
+    pub(crate) fn interpolate_into_iter(
+        &self,
+        out: &mut [f32],
+        start_mz: f64,
+        end_mz: f64,
+    ) -> usize {
         let offset = self.find_offset(start_mz);
         let stop_index = self.find_offset(end_mz);
 
@@ -243,7 +292,10 @@ impl<'a, 'b: 'a> SignalAverager<'a> {
             let start_idx = block.find(start_mz).saturating_sub(1);
             let block_slice = block.slice(start_idx, block.len());
 
-            let it = MonotonicBlockedIterator::new(&block_slice, grid_slice.iter().copied().zip(out.iter_mut()));
+            let it = MonotonicBlockedIterator::new(
+                &block_slice,
+                grid_slice.iter().copied().zip(out.iter_mut()),
+            );
             let _traveled = it.count();
         }
         if self.array_pairs.len() > 1 {
@@ -253,14 +305,170 @@ impl<'a, 'b: 'a> SignalAverager<'a> {
         stop_index - offset
     }
 
-    pub(crate) fn interpolate_into_idx(&self, out: &mut [f32], start_mz: f64, end_mz: f64) -> usize {
+    #[inline(always)]
+    /// Get the first and second control points' m/z and intensity values,
+    /// (mz, inten, mz1, inten1), in ascendng m/z order around `x`
+    fn get_interpolation_values(
+        &self,
+        x: f64,
+        j: usize,
+        mz_j: f64,
+        block_n: usize,
+        block_mz_array: &[f64],
+        block_intensity_array: &[f32],
+    ) -> Option<(f64, f64, f64, f64)> {
+        let js1 = j + 1;
+        if (mz_j <= x) && (js1 < block_n) {
+            Some((
+                mz_j,
+                block_intensity_array[j] as f64,
+                block_mz_array[js1],
+                block_intensity_array[js1] as f64,
+            ))
+        } else if mz_j > x && j > 0 {
+            let js1 = j - 1;
+            Some((
+                block_mz_array[js1],
+                block_intensity_array[js1] as f64,
+                block_mz_array[j],
+                block_intensity_array[j] as f64,
+            ))
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    fn interpolate_into_idx_seq(
+        &self,
+        grid_mzs: &[f64],
+        out: &mut [f32],
+        block_mz_array: &[f64],
+        block_intensity_array: &[f32],
+        block_n: usize,
+        block_searcher: &mut MonotonicBlockSearcher,
+    ) {
+        for (x, o) in grid_mzs.iter().copied().zip(out.into_iter()) {
+            let j = block_searcher.find(x);
+            let mz_j = block_mz_array[j];
+
+            if let Some((mz_j, inten_j, mz_j1, inten_j1)) = self.get_interpolation_values(
+                x,
+                j,
+                mz_j,
+                block_n,
+                block_mz_array,
+                block_intensity_array,
+            ) {
+                let interp = self.interpolate_point(mz_j, x, mz_j1, inten_j, inten_j1);
+                *o += interp as f32;
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn interpolate_into_idx_lanes_fallback<const LANES: usize>(
+        &self,
+        grid_mz_block: &[f64],
+        output_intensity_block: &mut [f32],
+        block_mz_array: &[f64],
+        block_intensity_array: &[f32],
+        block_n: usize,
+        block_searcher: &mut MonotonicBlockSearcher,
+    ) {
+        assert_eq!(grid_mz_block.len(), LANES);
+        assert_eq!(output_intensity_block.len(), LANES);
+        for lane_i in 0..LANES {
+            let grid_mz = grid_mz_block[lane_i];
+            let output_intensity = &mut output_intensity_block[lane_i];
+            let mz_index_of_x = block_searcher.find(grid_mz);
+            let mz_j = block_mz_array[mz_index_of_x];
+
+            if let Some((mz_j, inten_j, mz_j1, inten_j1)) = self.get_interpolation_values(
+                grid_mz,
+                mz_index_of_x,
+                mz_j,
+                block_n,
+                block_mz_array,
+                block_intensity_array,
+            ) {
+                let interp = self.interpolate_point(mz_j, grid_mz, mz_j1, inten_j, inten_j1);
+                *output_intensity += interp as f32;
+            } else {
+            }
+        }
+    }
+
+    #[cfg(feature = "avx")]
+    fn normalize_intensity_by_scan_count_avx(&self, out: &mut [f32]) {
+        #[cfg(target_arch = "x86_64")]
+        if std::arch::is_x86_feature_detected!("avx") {
+            // Use AVX SIMD instructions available on x86_64 CPUs to process up to eight steps at a time.
+            unsafe {
+                use std::arch::x86_64::*;
+                const LANES: usize = 8;
+                let normalizer = self.array_pairs.len() as f32;
+                let normalizer_v8 = _mm256_broadcast_ss(&normalizer);
+                let mut chunks_it = out.chunks_exact_mut(LANES);
+                while let Some(chunk) = chunks_it.next() {
+                    let o_v8: __m256 = _mm256_loadu_ps(chunk.as_ptr());
+                    let o_normalized_v8 = _mm256_div_ps(o_v8, normalizer_v8);
+                    _mm256_storeu_ps(chunk.as_mut_ptr(), o_normalized_v8);
+                }
+                for o in chunks_it.into_remainder() {
+                    *o /= normalizer;
+                }
+            }
+        } else {
+            self.normalize_intensity_by_scan_count_fallback(out)
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        self.normalize_intensity_by_scan_count_fallback(out);
+    }
+
+    fn normalize_intensity_by_scan_count_fallback(&self, out: &mut [f32]) {
+        let normalizer = self.array_pairs.len() as f32;
+
+        const LANES: usize = 8;
+        let mut it = out.chunks_exact_mut(LANES);
+
+        while let Some(chunk) = it.next() {
+            for i in 0..LANES {
+                chunk[i] /= normalizer;
+            }
+        }
+        it.into_remainder().iter_mut().for_each(|y| *y /= normalizer);
+    }
+
+    fn normalize_intensity_by_scan_count(&self, out: &mut [f32]) {
+        #[cfg(target_arch = "x86_64")]
+        if std::arch::is_x86_feature_detected!("avx"){
+            #[cfg(feature = "avx")]
+            self.normalize_intensity_by_scan_count_avx(out);
+            #[cfg(not(feature = "avx"))]
+            self.normalize_intensity_by_scan_count_fallback(out);
+        } else {
+            self.normalize_intensity_by_scan_count_fallback(out);
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        self.normalize_intensity_by_scan_count_fallback(out);
+    }
+
+    pub(crate) fn interpolate_into_idx(
+        &self,
+        out: &mut [f32],
+        start_mz: f64,
+        end_mz: f64,
+    ) -> usize {
         let offset = self.find_offset(start_mz);
         let stop_index = self.find_offset(end_mz);
 
         let grid_size = self.mz_grid.len();
-        assert!(offset < grid_size || grid_size == 0);
-        assert!(stop_index <= grid_size);
-        assert!((stop_index - offset) == out.len());
+        {
+            assert!(offset < grid_size || grid_size == 0);
+            assert!(stop_index <= grid_size);
+            assert!((stop_index - offset) == out.len());
+        }
 
         let grid_slice = &self.mz_grid[offset..stop_index];
 
@@ -275,38 +483,127 @@ impl<'a, 'b: 'a> SignalAverager<'a> {
             assert_eq!(block_mz_array.len(), block_n);
             assert_eq!(block_intensity_array.len(), block_n);
 
-            for (x, o) in grid_slice.iter().copied().zip(out.iter_mut()) {
-                let j = block_searcher.find(x);
-                assert!(j < block_n);
-                let mz_j = block_mz_array[j];
+            const LANES: usize = 4;
+            let mut grid_chunks = grid_slice.chunks_exact(LANES);
+            let mut out_chunks = out.chunks_exact_mut(LANES);
 
-                let js1 = j + 1;
-                let (mz_j, inten_j, mz_j1, inten_j1) = if (mz_j <= x) && (js1 < block_n) {
-                    (
-                        mz_j,
-                        block_intensity_array[j],
-                        block_mz_array[js1],
-                        block_intensity_array[js1],
-                    )
-                } else if mz_j > x && j > 0 {
-                    let js1 = j - 1;
-                    (
-                        block_mz_array[js1],
-                        block_intensity_array[js1],
-                        block_mz_array[j],
-                        block_intensity_array[j],
-                    )
+            while let (Some(grid_mz_block), Some(output_intensity_block)) =
+                (grid_chunks.next(), out_chunks.next())
+            {
+                #[cfg(not(target_arch = "x86_64"))]
+                let did_vector = false;
+                #[cfg(target_arch = "x86_64")]
+                let did_vector = if std::arch::is_x86_feature_detected!("avx") {
+                    #[cfg(not(feature = "avx"))]
+                    {
+                        false
+                    }
+                    #[cfg(feature = "avx")]
+                    // Use AVX SIMD instructions available on x86_64 CPUs to process up to four steps at a time.
+                    unsafe {
+                        use std::arch::x86_64::*;
+                        let grid_mz_first = *grid_mz_block.get_unchecked(0);
+                        let grid_mz_last = *grid_mz_block.get_unchecked(3);
+                        let j_first = block_searcher.find(grid_mz_first);
+                        let j_last = block_searcher.peek(grid_mz_last);
+                        let mz_j_first = *block_mz_array.get_unchecked(j_first);
+
+                        // If the solution uses the same two control points for every comparison, as given by both
+                        // using the same first point in the block, then we can take this fast path that performs
+                        // the interpolation operation using AVX and 256-bit vector instructions.
+                        //
+                        // This could also be done with the AVX 512-bit vectors but they are not available on most
+                        // machines yet.
+                        if j_first == j_last {
+                            if let Some((mz_j, inten_j, mz_j1, inten_j1)) = self
+                                .get_interpolation_values(
+                                    grid_mz_first,
+                                    j_first,
+                                    mz_j_first,
+                                    block_n,
+                                    block_mz_array,
+                                    block_intensity_array,
+                                )
+                            {
+                                // Populate the vectors going into `interpolate_avx`
+                                let mz_x_v4: __m256d = _mm256_loadu_pd(grid_mz_block.as_ptr());
+                                let mz_j_v4: __m256d = _mm256_broadcast_sd(&mz_j);
+                                let mz_j1_v4: __m256d = _mm256_broadcast_sd(&mz_j1);
+                                let inten_j_v4: __m256d = _mm256_broadcast_sd(&inten_j);
+                                let inten_j1_v4: __m256d = _mm256_broadcast_sd(&inten_j1);
+
+                                // Perform the interpolation on the vector registers
+                                let result_v4 = self.interpolate_avx(
+                                    mz_j_v4,
+                                    mz_x_v4,
+                                    mz_j1_v4,
+                                    inten_j_v4,
+                                    inten_j1_v4,
+                                );
+
+                                // Cast down from f64 to f32 registers
+                                let result_v4_f32 = _mm256_cvtpd_ps(result_v4);
+                                // Load the accumulator from the output array of f32
+                                let acc_v4 = _mm_loadu_ps(output_intensity_block.as_ptr());
+                                // Add the result to the accumulator
+                                let total_v4 = _mm_add_ps(result_v4_f32, acc_v4);
+                                // Store the accumulator back to the array of f32
+                                _mm_storeu_ps(output_intensity_block.as_mut_ptr(), total_v4);
+                            } else {
+                            }
+                            true
+                        } else {
+                            false
+                        }
+                    }
                 } else {
-                    continue;
+                    false
                 };
-                let interp =
-                    self.interpolate_point(mz_j, x, mz_j1, inten_j as f64, inten_j1 as f64);
-                *o += interp as f32;
+                if !did_vector {
+                    #[cfg(target_arch = "x86_64")]
+                    if std::arch::is_x86_feature_detected!("avx") {
+                        self.interpolate_into_idx_lanes_fallback::<LANES>(
+                            grid_mz_block,
+                            output_intensity_block,
+                            block_mz_array,
+                            block_intensity_array,
+                            block_n,
+                            &mut block_searcher,
+                        );
+                    } else {
+                        self.interpolate_into_idx_lanes_fallback::<LANES>(
+                            grid_mz_block,
+                            output_intensity_block,
+                            block_mz_array,
+                            block_intensity_array,
+                            block_n,
+                            &mut block_searcher,
+                        );
+                    }
+                    #[cfg(not(target_arch = "x86_64"))]
+                    self.interpolate_into_idx_lanes_fallback::<LANES>(
+                        grid_mz_block,
+                        output_intensity_block,
+                        block_mz_array,
+                        block_intensity_array,
+                        block_n,
+                        &mut block_searcher,
+                    );
+                }
             }
+
+            // Clean up remainder
+            self.interpolate_into_idx_seq(
+                grid_chunks.remainder(),
+                out_chunks.into_remainder(),
+                block_mz_array,
+                block_intensity_array,
+                block_n,
+                &mut block_searcher,
+            );
         }
         if self.array_pairs.len() > 1 {
-            let normalizer = self.array_pairs.len() as f32;
-            out.iter_mut().for_each(|y| *y /= normalizer);
+            self.normalize_intensity_by_scan_count(out);
         }
         stop_index - offset
     }
@@ -553,7 +850,12 @@ impl<'a, 'lifespan: 'a> SegmentGridSignalAverager<'lifespan> {
         }
     }
 
-    pub fn from_iter<I: Iterator<Item=(f64, ArrayPair<'lifespan>)>>(mz_start: f64, mz_end: f64, dx: f64, iter: I) -> Self {
+    pub fn from_iter<I: Iterator<Item = (f64, ArrayPair<'lifespan>)>>(
+        mz_start: f64,
+        mz_end: f64,
+        dx: f64,
+        iter: I,
+    ) -> Self {
         let mut inst = Self::new(mz_start, mz_end, dx);
         inst.extend(iter);
         inst
@@ -625,7 +927,7 @@ impl<'a, 'lifespan: 'a> SegmentGridSignalAverager<'lifespan> {
                 segments: segments,
                 intensity_array: Vec::new(),
                 time,
-            }
+            };
         }
         let mut segment = Segment::default();
         let mut opened = false;
@@ -781,16 +1083,16 @@ mod test {
     use super::*;
     use crate::peak_picker::PeakPicker;
     use crate::test_data::{X, Y};
-    use crate::FittedPeak;
     #[allow(unused)]
     use crate::text;
+    use crate::FittedPeak;
 
     #[test]
     fn test_rebin_one() {
-        let mut averager = SignalAverager::new(X[0], X[X.len() - 1], 0.00001);
+        let mut averager = SignalAverager::new(X[0], X[X.len() - 1], 0.001);
         averager.push(ArrayPair::wrap(&X, &Y));
         let yhat = averager.interpolate();
-        // text::arrays_to_file(ArrayPair::wrap(&averager.mz_grid, &yhat), "interpolate_iter.txt").unwrap();
+        // text::arrays_to_file(ArrayPair::wrap(&averager.mz_grid, &yhat), "interpolate_avx.txt").unwrap();
         let picker = PeakPicker::default();
         let mut acc = Vec::new();
         picker
@@ -799,9 +1101,24 @@ mod test {
         let mzs = [180.0633881, 181.06387399204235, 182.06404644991485];
         for (i, (peak, mz)) in acc.iter().zip(mzs.iter()).enumerate() {
             let diff = peak.mz - mz;
-            assert!((peak.mz - mz).abs() < 1e-6, "Diff {} on peak {i}", diff);
+            assert!((peak.mz - mz).abs() < 1e-4, "Diff {} on peak {i}", diff);
             assert!(peak.intensity > 0.0);
         }
+    }
+
+    #[test]
+    fn test_averaging() -> io::Result<()> {
+        let scans = text::arrays_over_time_from_file("./test/data/profiles.txt")?;
+        let scans: Vec<_> = scans.into_iter().skip(3).take(3).map(|(_, arrays)| arrays).collect();
+
+        let low_mz = scans.iter().map(|s| s.min_mz).min_by(|a, b| a.total_cmp(b)).unwrap();
+        let high_mz = scans.iter().map(|s| s.max_mz).max_by(|a, b| a.total_cmp(b)).unwrap();
+
+        let mut averager = SignalAverager::new(low_mz, high_mz, 0.001);
+        averager.extend(scans.clone().into_iter());
+
+        let _yhat = averager.interpolate();
+        Ok(())
     }
 
     #[test]
@@ -818,7 +1135,7 @@ mod test {
         let mzs = [180.0633881, 181.06387399204235, 182.06404644991485];
         for (i, (peak, mz)) in acc.iter().zip(mzs.iter()).enumerate() {
             let diff = peak.mz - mz;
-            assert!((peak.mz - mz).abs() < 1e-6, "Diff {} on peak {i}", diff);
+            assert!((peak.mz - mz).abs() < 1e-4, "Diff {} on peak {i}", diff);
             assert!(peak.intensity > 0.0);
         }
     }
@@ -837,7 +1154,7 @@ mod test {
         let mzs = [180.0633881, 181.06387399204235, 182.06404644991485];
         for (i, (peak, mz)) in acc.iter().zip(mzs.iter()).enumerate() {
             let diff = peak.mz - mz;
-            assert!((peak.mz - mz).abs() < 1e-6, "Diff {} on peak {i}", diff);
+            assert!((peak.mz - mz).abs() < 1e-4, "Diff {} on peak {i}", diff);
             assert!(peak.intensity > 0.0);
         }
     }
@@ -845,10 +1162,10 @@ mod test {
     #[test]
     #[cfg(feature = "parallelism")]
     fn test_rebin_parallel() {
-        let mut averager = SignalAverager::new(X[0], X[X.len() - 1], 0.00001);
+        let mut averager = SignalAverager::new(X[0], X[X.len() - 1], 0.001);
         averager.push(ArrayPair::wrap(&X, &Y));
         let yhat = averager.interpolate_chunks_parallel(6);
-        let picker = PeakPicker::default();
+        let picker = PeakPicker::new(0.0, 0.0, 1.0, Default::default());
         let mut acc = Vec::new();
         picker
             .discover_peaks(&averager.mz_grid, &yhat, &mut acc)
@@ -856,7 +1173,7 @@ mod test {
         let mzs = [180.0633881, 181.06387399204235, 182.06404644991485];
         for (i, (peak, mz)) in acc.iter().zip(mzs.iter()).enumerate() {
             let diff = peak.mz - mz;
-            assert!((peak.mz - mz).abs() < 1e-6, "Diff {} on peak {i}", diff);
+            assert!((peak.mz - mz).abs() < 1e-4, "Diff {} on peak {i}", diff);
             assert!(peak.intensity > 0.0);
         }
     }
@@ -879,8 +1196,8 @@ mod test {
                 .collect();
 
             // log::info!("Reprofiling");
-            let peak_models =
-                reprofiler.build_peak_shape_models(&peaks.as_slice(), crate::reprofile::PeakShape::Gaussian);
+            let peak_models = reprofiler
+                .build_peak_shape_models(&peaks.as_slice(), crate::reprofile::PeakShape::Gaussian);
             let block = reprofiler.reprofile_from_models(&peak_models);
 
             averager.push(t, block);

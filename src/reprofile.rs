@@ -5,6 +5,14 @@ use std::borrow::Cow;
 use std::cmp;
 use std::iter;
 
+#[cfg(target_arch = "x86")]
+use std::arch::x86::__m256d;
+#[cfg(target_arch = "x86_64")]
+use std::arch::x86_64::__m256d;
+#[cfg(not(any(target_arch = "x86_64", target_arch = "x86")))]
+#[derive(Clone, Copy)]
+struct __m256d();
+
 use mzpeaks::{
     CentroidLike, CoordinateLike, IndexType, IndexedCoordinate, IntensityMeasurement, MZ,
 };
@@ -99,14 +107,55 @@ impl<'lifespan> PeakShapeModel<'lifespan> {
 
     /// Estimate the intensity of this peak at `mz`, relative to the
     /// position of the model peak
+    #[inline]
     pub fn predict(&self, mz: &f64) -> f32 {
         match self.shape {
-            PeakShape::Gaussian => {
-                let spread = self.peak.full_width_at_half_max / 2.35482;
-                let scaler = (-(f64::powf(mz - self.peak.mz, 2.0))
-                    / (2.0 * f64::powf(spread as f64, 2.0)))
-                .exp();
-                self.peak.intensity * scaler as f32
+            PeakShape::Gaussian => self.predict_gaussian_scalar(mz),
+        }
+    }
+
+    #[inline(always)]
+    fn predict_gaussian_scalar(&self, mz: &f64) -> f32 {
+        let spread = self.peak.full_width_at_half_max / 2.35482;
+        let scaler =
+            (-(f64::powf(mz - self.peak.mz, 2.0)) / (2.0 * f64::powf(spread as f64, 2.0))).exp();
+        self.peak.intensity * scaler as f32
+    }
+
+
+    #[cfg(target_arch = "x86_64")]
+    fn gaussian_avx(&self, grid_mz: &[f64], out: &mut [f32]) {
+        const LANES: usize = 4;
+        use std::arch::x86_64::*;
+
+        unsafe {
+            let spread = self.peak.full_width_at_half_max as f64 / 2.35482;
+            let div = -(2.0 * spread.powf(2.0));
+            let div_v4 = _mm256_broadcast_sd(&div);
+            let centroid = self.peak.mz;
+            let centroid_v4 = _mm256_broadcast_sd(&centroid);
+            let apex = self.peak.intensity as f64;
+            let log_apex = apex.ln();
+            let log_apex_v4 = _mm256_broadcast_sd(&log_apex);
+
+            let mut it = grid_mz.chunks_exact(LANES);
+            let mut out_it = out.chunks_exact_mut(LANES);
+            while let (Some(mz_chunk), Some(out_chunk)) = (it.next(), out_it.next()) {
+                let mz_v4 = _mm256_loadu_pd(mz_chunk.as_ptr());
+                let diff_v4 = _mm256_sub_pd(mz_v4, centroid_v4);
+                let diff_square_v4 = _mm256_mul_pd(diff_v4, diff_v4);
+                let scaler_v4 = _mm256_div_pd(diff_square_v4, div_v4);
+                let log_signal_v4 = _mm256_add_pd(scaler_v4, log_apex_v4);
+                let log_signal_v4 = _mm256_cvtpd_ps(log_signal_v4);
+                let mut result = [0.0f32; 4];
+                _mm_storeu_ps(result.as_mut_ptr(), log_signal_v4);
+                for i in 0..4 {
+                    out_chunk[i] += result[i].exp();
+                }
+            }
+
+            for (mz, o) in it.remainder().iter().zip(out_it.into_remainder()) {
+                *o += self.predict_gaussian_scalar(mz)
             }
         }
     }
@@ -115,15 +164,36 @@ impl<'lifespan> PeakShapeModel<'lifespan> {
     pub fn shape(&self, dx: f64) -> (Vec<f64>, Vec<f32>) {
         let (start, end) = self.extremes();
         let mz_array = gridspace(start, end, dx);
-        let intensity_array = mz_array.iter().map(|x| self.predict(x)).collect();
+        let mut intensity_array = vec![0.0f32; mz_array.len()];
+        self.shape_in(&mz_array, &mut intensity_array);
         (mz_array, intensity_array)
     }
 
     /// Generate a theoretical peak shape signal with m/z arrays in `mz_array`
     /// and adds the theoretical intensity to `intensity_array`
     pub fn shape_in(&self, mz_array: &[f64], intensity_array: &mut [f32]) {
-        for (i, val) in mz_array.iter().map(|x| self.predict(x)).enumerate() {
-            intensity_array[i] += val;
+        #[cfg(all(feature = "avx", target_arch = "x86_64"))]
+        {
+            if std::arch::is_x86_feature_detected!("avx") {
+                self.gaussian_avx(mz_array, intensity_array)
+            } else {
+                self.shape_in_fallback::<4>(mz_array, intensity_array)
+            }
+        }
+        #[cfg(any(not(target_arch = "x86_64"), not(feature = "avx")))]
+        self.shape_in_fallback::<4>(mz_array, intensity_array)
+    }
+
+    fn shape_in_fallback<const LANES: usize>(&self, mz_array: &[f64], intensity_array: &mut [f32]) {
+        let mut it = mz_array.chunks_exact(LANES);
+        let mut out_it = intensity_array.chunks_exact_mut(LANES);
+        while let (Some(mz_chunk), Some(out_chunk)) = (it.next(), out_it.next()) {
+            for i in 0..LANES {
+                out_chunk[i] += self.predict(&mz_chunk[i]);
+            }
+        }
+        for (mz, o) in it.remainder().iter().zip(out_it.into_remainder()) {
+            *o += self.predict(mz);
         }
     }
 
@@ -315,6 +385,8 @@ mod test {
     use crate::peak_picker::pick_peaks;
     use crate::reprofile::reprofile;
     use crate::test_data::{NOISE, X, Y};
+    #[allow(unused)]
+    use crate::text;
 
     #[test]
     fn test_builder() -> () {
@@ -328,6 +400,7 @@ mod test {
         assert_eq!(peaks.len(), 37);
         let iterator = peaks.iter();
         let pair = reprofile(iterator, 0.01);
+        // text::arrays_to_file(pair.borrow(), "reprofiled_avx.txt").unwrap();
         eprintln!("{} {}", pair.min_mz, pair.max_mz);
         let peaks2 = pick_peaks(&pair.mz_array, &pair.intensity_array).unwrap();
         assert_eq!(peaks2.len(), 32);
