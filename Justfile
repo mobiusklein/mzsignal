@@ -13,5 +13,5 @@ release tag: (changelog tag)
     cargo publish
 
 asm:
-    cargo asm --no-default-features --features nalgebra --lib mzsignal::average::SignalAverager::interpolate_into \
-        --simplify --llvm --rust --color | bat
+    cargo asm --no-default-features --features nalgebra,avx --lib mzsignal::average::SignalAverager::interpolate 0 \
+        --simplify --rust --color | bat
