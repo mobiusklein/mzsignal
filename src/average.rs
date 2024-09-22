@@ -55,6 +55,57 @@ trait MZInterpolator {
         vab / step_ab
     }
 
+    #[inline(always)]
+    /// A version of [`MZInterpolator::interpolate_point`] that manually unrolls the computation over 4 steps to
+    /// strongly hint the compiler to use SIMD here.
+    fn interpolate_chunk_unrolled<const LANES: usize>(
+        &self,
+        mz_j: &[f64; LANES],
+        mz_x: &[f64; LANES],
+        mz_j1: &[f64; LANES],
+        inten_j: &[f64; LANES],
+        inten_j1: &[f64; LANES],
+    ) -> [f64; LANES] {
+        // ((inten_j * (mz_j1 - mz_x)) + (inten_j1 * (mz_x - mz_j))) / (mz_j1 - mz_j)
+        let mut step_a = [0.0f64; LANES];
+        unsafe {
+            for i in 0..LANES {
+                step_a[i] = *mz_j1.get_unchecked(i) - *mz_x.get_unchecked(i);
+            }
+        }
+        let mut step_b = [0.0f64; LANES];
+        unsafe {
+            for i in 0..LANES {
+                step_b[i] = *mz_x.get_unchecked(i) - *mz_j.get_unchecked(i);
+            }
+        }
+        let mut step_ab = [0.0f64; LANES];
+        unsafe {
+            for i in 0..LANES {
+                step_ab[i] = *mz_j1.get_unchecked(i) - *mz_j.get_unchecked(i);
+           }
+        }
+        let mut vb = [0.0f64; LANES];
+        unsafe {
+            for i in 0..LANES {
+                vb[i] = *inten_j1.get_unchecked(i) * *step_b.get_unchecked(i);
+            }
+        }
+        let mut vab = [0.0f64; LANES];
+        unsafe {
+            for i in 0..LANES {
+                vab[i] = inten_j.get_unchecked(i).mul_add(*step_a.get_unchecked(i), *vb.get_unchecked(i));
+            }
+        }
+        let mut res = [0.0f64; LANES];
+        unsafe {
+            for i in 0..LANES {
+                res[i] = *vab.get_unchecked(i) / *step_ab.get_unchecked(i);
+            }
+        }
+        res
+    }
+
     // A version of [`MZInterpolator::interpolate_point`] that uses AVX 256-bit register operations
     #[cfg(feature = "avx")]
     #[cfg(target_arch = "x86_64")]
@@ -378,11 +429,20 @@ impl<'a, 'b: 'a> SignalAverager<'a> {
     ) {
         assert_eq!(grid_mz_block.len(), LANES);
         assert_eq!(output_intensity_block.len(), LANES);
+
+        let mut mz_j_v = [0.0f64; LANES];
+        let mut mz_j1_v = [0.0f64; LANES];
+        let mut inten_j_v = [0.0f64; LANES];
+        let mut inten_j1_v = [0.0f64; LANES];
+        let mut mz_grid_v = [0.0f64; LANES];
+
         for lane_i in 0..LANES {
             let grid_mz = grid_mz_block[lane_i];
-            let output_intensity = &mut output_intensity_block[lane_i];
+            // let output_intensity = &mut output_intensity_block[lane_i];
             let mz_index_of_x = block_searcher.find(grid_mz);
-            let mz_j = block_mz_array[mz_index_of_x];
+            let mz_j = unsafe { *block_mz_array.get_unchecked(mz_index_of_x) };
+
+            mz_grid_v[lane_i] = grid_mz;
 
             if let Some((mz_j, inten_j, mz_j1, inten_j1)) = self.get_interpolation_values(
                 grid_mz,
@@ -392,10 +452,24 @@ impl<'a, 'b: 'a> SignalAverager<'a> {
                 block_mz_array,
                 block_intensity_array,
             ) {
-                let interp = self.interpolate_point(mz_j, grid_mz, mz_j1, inten_j, inten_j1);
-                *output_intensity += interp as f32;
+                mz_j_v[lane_i] = mz_j;
+                mz_j1_v[lane_i] = mz_j1;
+                inten_j_v[lane_i] = inten_j;
+                inten_j1_v[lane_i] = inten_j1;
+
+                // let interp = self.interpolate_point(mz_j, grid_mz, mz_j1, inten_j, inten_j1);
+                // *output_intensity += interp as f32;
             } else {
+                mz_j_v[lane_i] = 2.0;
+                mz_j1_v[lane_i] = 1.0;
+                inten_j_v[lane_i] = 0.0;
+                inten_j1_v[lane_i] = 0.0;
             }
+        }
+
+        let res = self.interpolate_chunk_unrolled(&mz_j_v, &mz_grid_v, &mz_j1_v, &inten_j_v, &inten_j1_v);
+        for lane_i in 0..LANES {
+            output_intensity_block[lane_i] += res[lane_i] as f32;
         }
     }
 
@@ -472,6 +546,12 @@ impl<'a, 'b: 'a> SignalAverager<'a> {
 
         let grid_slice = &self.mz_grid[offset..stop_index];
 
+        #[cfg(not(target_arch = "x86_64"))]
+        let has_avx = false;
+        #[cfg(target_arch = "x86_64")]
+        let has_avx = std::arch::is_x86_feature_detected!("avx");
+
+
         for block in self.array_pairs.iter() {
             if block.is_empty() {
                 continue;
@@ -493,7 +573,7 @@ impl<'a, 'b: 'a> SignalAverager<'a> {
                 #[cfg(not(target_arch = "x86_64"))]
                 let did_vector = false;
                 #[cfg(target_arch = "x86_64")]
-                let did_vector = if std::arch::is_x86_feature_detected!("avx") {
+                let did_vector = if has_avx {
                     #[cfg(not(feature = "avx"))]
                     {
                         false

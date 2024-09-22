@@ -123,7 +123,7 @@ impl<'lifespan> PeakShapeModel<'lifespan> {
     }
 
 
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(all(target_arch = "x86_64", feature = "avx"))]
     fn gaussian_avx(&self, grid_mz: &[f64], out: &mut [f32]) {
         const LANES: usize = 4;
         use std::arch::x86_64::*;
