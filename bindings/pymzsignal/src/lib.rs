@@ -2,12 +2,11 @@ use std::borrow::Cow;
 use std::ops::Index;
 
 use mzpeaks::prelude::PeakCollectionMut;
-use ndarray::prelude::Dim;
 use pyo3::exceptions::{PyException, PyIndexError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyFloat, PyLong, PySlice, PyString};
 
-use numpy::{PyArray, PyArray1, PyReadonlyArray1, ToPyArray};
+use numpy::{ndarray::Dim, PyArray, PyArray1, PyReadonlyArray1, ToPyArray};
 
 use mzsignal::average::average_signal;
 use mzsignal::denoise::denoise;
@@ -187,11 +186,11 @@ impl From<f64> for ErrorToleranceArg {
 
 impl<'a> FromPyObject<'a> for ErrorToleranceArg {
     fn extract(ob: &'a PyAny) -> PyResult<Self> {
-        if ob.is_instance_of::<PyFloat>()? {
+        if ob.is_instance_of::<PyFloat>() {
             Ok(ErrorToleranceArg(ob.extract()?))
-        } else if ob.is_instance_of::<Tolerance>()? {
+        } else if ob.is_instance_of::<Tolerance>() {
             Ok(ErrorToleranceArg(ob.extract()?))
-        } else if ob.is_instance_of::<PyString>()? {
+        } else if ob.is_instance_of::<PyString>() {
             let s: &str = ob.extract()?;
             match s.parse::<_Tolerance>() {
                 Ok(v) => Ok(ErrorToleranceArg(Tolerance(v))),
@@ -253,10 +252,10 @@ impl PyPeakSet {
             .collect())
     }
 
-    fn __getitem__(&self, i: &PyAny) -> PyResult<PyFittedPeak> {
-        if i.is_instance_of::<PySlice>()? {
+    fn __getitem__(&self, i: Bound<PyAny>) -> PyResult<PyFittedPeak> {
+        if i.is_instance_of::<PySlice>() {
             Err(PyTypeError::new_err("Could not select indices by slice"))
-        } else if i.is_instance_of::<PyLong>()? {
+        } else if i.is_instance_of::<PyLong>() {
             let i: usize = i.extract()?;
             if i >= self.len() {
                 Err(PyIndexError::new_err(i))
@@ -311,14 +310,14 @@ fn py_fit_full_width_at_half_max(
 #[pyo3(name = "denoise", signature = (mz_array, intensity_array, scale = 5.0, inplace = true))]
 fn py_denoise<'py>(
     mz_array: PyReadonlyArray1<f64>,
-    intensity_array: &'py PyArray1<f32>,
+    intensity_array: Bound<PyArray1<f32>>,
     scale: f32,
     inplace: bool,
 ) -> PyResult<Py<PyArray1<f32>>> {
     let mz_view = mz_array.as_slice()?;
     if inplace {
         unsafe {
-            let view = intensity_array.as_slice_mut()?;
+            let view = intensity_array.as_gil_ref().as_slice_mut()?;
             let res = denoise(mz_view, view, scale);
             match res {
                 Ok(_view) => Ok(intensity_array.into()),
@@ -331,8 +330,8 @@ fn py_denoise<'py>(
         match res {
             Ok(_view) => {
                 let pyarray = Python::with_gil(|py| -> Py<PyArray1<f32>> {
-                    let result = PyArray1::from_iter(py, intensity_vec);
-                    result.to_owned()
+                    let result = PyArray1::from_iter_bound(py, intensity_vec);
+                    result.unbind()
                 });
                 Ok(pyarray)
             }
@@ -342,7 +341,7 @@ fn py_denoise<'py>(
 }
 
 #[pyfunction]
-#[pyo3(name = "average_signal", signature = (array_pairs, dx = 0.005))]
+#[pyo3(name = "average_signal", signature = (array_pairs, dx = 0.002))]
 fn py_average_signal(
     array_pairs: Vec<(PyReadonlyArray1<f64>, PyReadonlyArray1<f32>)>,
     dx: f64,
@@ -359,8 +358,8 @@ fn py_average_signal(
 
     let new_arrays = average_signal(&wrapped_pairs, dx);
     Python::with_gil(|py| {
-        let x = new_arrays.mz_array.to_pyarray(py).into();
-        let y = new_arrays.intensity_array.to_pyarray(py).into();
+        let x = new_arrays.mz_array.to_pyarray_bound(py).into();
+        let y = new_arrays.intensity_array.to_pyarray_bound(py).into();
         Ok((x, y))
     })
 }
@@ -397,19 +396,18 @@ fn py_pick_peaks(
 }
 
 #[pyfunction]
-#[pyo3(name = "reprofile", signature = (peaks, dx = 0.005))]
+#[pyo3(name = "reprofile", signature = (peaks, dx = 0.002))]
 fn py_reprofile(
-    peaks: Py<PyPeakSet>,
+    peaks: &PyPeakSet,
     dx: f64,
 ) -> (
     Py<PyArray<f64, Dim<[usize; 1]>>>,
     Py<PyArray<f32, Dim<[usize; 1]>>>,
 ) {
+    let pair = reprofile(peaks.0.iter().map(|p| &p.0), dx);
     let (mz_array, intensity_array) = Python::with_gil(|py| {
-        let peak_set = peaks.borrow(py);
-        let pair = reprofile(peak_set.0.iter().map(|p| &p.0), dx);
-        let mz_array = pair.mz_array.to_pyarray(py).to_owned();
-        let intensity_array = pair.intensity_array.to_pyarray(py).to_owned();
+        let mz_array = pair.mz_array.to_pyarray_bound(py).unbind();
+        let intensity_array = pair.intensity_array.to_pyarray_bound(py).unbind();
         (mz_array, intensity_array)
     });
     (mz_array, intensity_array)
@@ -426,7 +424,7 @@ fn py_moving_average(
     new_intensity.resize(intensity_array_.len(), 0.0);
     moving_average::<f32, 3>(intensity_array_, &mut new_intensity);
     let new_py_intensity_array: Py<PyArray<f32, Dim<[usize; 1]>>> =
-        Python::with_gil(|py| new_intensity.to_pyarray(py).to_owned());
+        Python::with_gil(|py| new_intensity.to_pyarray_bound(py).unbind());
     Ok(new_py_intensity_array)
 }
 
@@ -450,13 +448,13 @@ fn py_savitsky_golay(
         Err(e) => return Err(PyValueError::new_err(e.to_string())),
     };
 
-    let py_res = Python::with_gil(|py| res.to_pyarray(py).to_owned());
+    let py_res = Python::with_gil(|py| res.to_pyarray_bound(py).unbind());
     Ok(py_res)
 }
 
 /// A Python module implemented in Rust.
 #[pymodule]
-fn pymzsignal(_py: Python, m: &PyModule) -> PyResult<()> {
+fn pymzsignal(_py: Python, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_approximate_signal_to_noise, m)?)?;
     m.add_function(wrap_pyfunction!(py_pick_peaks, m)?)?;
     m.add_function(wrap_pyfunction!(py_denoise, m)?)?;

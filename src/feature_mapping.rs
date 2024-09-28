@@ -21,7 +21,7 @@ use crate::search::nearest;
 pub struct MapIndex {
     /// The time index effectively refers to the row in [`PeakMapState::peak_table`]
     time_index: usize,
-    /// The time index effectively refers to the column in the `time_index`-th row in [`PeakMapState::peak_table`]
+    /// The peak index effectively refers to the column in the `peak_index`-th row in [`PeakMapState::peak_table`]
     peak_index: usize,
 }
 

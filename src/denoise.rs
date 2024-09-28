@@ -69,6 +69,8 @@ impl<'transient, 'lifespan: 'transient> Window<'lifespan> {
         self.rebin_intensities();
         let n_count = self.bins;
 
+        assert!(self.histogram.bin_count.len() >= n_count);
+
         let mut mask_level = 0;
         for i_count in 0..n_count {
             if self.histogram.bin_count[i_count] > mask_level {

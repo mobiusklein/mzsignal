@@ -123,8 +123,9 @@ impl<'lifespan> PeakShapeModel<'lifespan> {
     }
 
 
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(all(target_arch = "x86_64", feature = "avx"))]
     fn gaussian_avx(&self, grid_mz: &[f64], out: &mut [f32]) {
+        assert_eq!(grid_mz.len(), out.len());
         const LANES: usize = 4;
         use std::arch::x86_64::*;
 
@@ -185,6 +186,7 @@ impl<'lifespan> PeakShapeModel<'lifespan> {
     }
 
     fn shape_in_fallback<const LANES: usize>(&self, mz_array: &[f64], intensity_array: &mut [f32]) {
+        assert_eq!(mz_array.len(), intensity_array.len());
         let mut it = mz_array.chunks_exact(LANES);
         let mut out_it = intensity_array.chunks_exact_mut(LANES);
         while let (Some(mz_chunk), Some(out_chunk)) = (it.next(), out_it.next()) {
