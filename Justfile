@@ -11,3 +11,7 @@ release tag: (changelog tag)
     git commit -m "chore: update changelog"
     git tag {{tag}}
     cargo publish
+
+asm:
+    cargo asm --no-default-features --features nalgebra,avx --lib mzsignal::average::SignalAverager::interpolate 0 \
+        --simplify --rust --color | bat

@@ -241,6 +241,10 @@ pub fn fit_rising_side_width(
     data_index: usize,
     signal_to_noise: f32,
 ) -> f64 {
+
+    assert!(data_index < mz_array.len());
+    assert!(data_index < intensity_array.len());
+
     let peak = intensity_array[data_index];
     let peak_half = peak / 2.0;
     let mz = mz_array[data_index];
@@ -311,6 +315,10 @@ pub fn fit_falling_side_width(
     data_index: usize,
     signal_to_noise: f32,
 ) -> f64 {
+
+    assert!(data_index < mz_array.len());
+    assert!(data_index < intensity_array.len());
+
     let peak = intensity_array[data_index];
     let peak_half = peak / 2.0;
     let mz = mz_array[data_index];
@@ -321,6 +329,8 @@ pub fn fit_falling_side_width(
     if peak == 0.0 {
         return mz;
     }
+
+    assert!(n < intensity_array.len());
 
     for index in data_index..n {
         let current_mz = mz_array[index];
@@ -413,6 +423,7 @@ pub fn full_width_at_half_max(
 /// Fit a Gaussian peak shape at `index`.
 pub fn quadratic_fit(mz_array: &[f64], intensity_array: &[f32], index: usize, partial_peak_fit: &PartialPeakFit) -> f64 {
     let n = mz_array.len().saturating_sub(1);
+    assert!(n < intensity_array.len());
     let mut step: usize;
 
     // The interpolation range must fit from points at least `min_dx` m/z units apart

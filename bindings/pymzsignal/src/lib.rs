@@ -1,12 +1,12 @@
 use std::borrow::Cow;
 use std::ops::Index;
 
-use ndarray::prelude::Dim;
+use mzpeaks::prelude::PeakCollectionMut;
 use pyo3::exceptions::{PyException, PyIndexError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyFloat, PyLong, PySlice, PyString};
 
-use numpy::{PyArray, PyArray1, PyReadonlyArray1, ToPyArray};
+use numpy::{ndarray::Dim, PyArray, PyArray1, PyReadonlyArray1, ToPyArray};
 
 use mzsignal::average::average_signal;
 use mzsignal::denoise::denoise;
@@ -138,14 +138,6 @@ impl Index<usize> for PyPeakSet {
 }
 
 impl PeakCollection<PyFittedPeak, MZ> for PyPeakSet {
-    fn push(&mut self, peak: PyFittedPeak) -> mzpeaks::peak_set::OrderUpdateEvent {
-        self.0.push(peak)
-    }
-
-    fn sort(&mut self) {
-        self.0.sort()
-    }
-
     fn len(&self) -> usize {
         self.0.len()
     }
@@ -160,6 +152,20 @@ impl PeakCollection<PyFittedPeak, MZ> for PyPeakSet {
 
     fn search_by(&self, query: f64) -> Result<usize, usize> {
         self.0.search_by(query)
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &PyFittedPeak> {
+        self.0.iter()
+    }
+}
+
+impl PeakCollectionMut<PyFittedPeak, MZ> for PyPeakSet {
+    fn push(&mut self, peak: PyFittedPeak) -> mzpeaks::peak_set::OrderUpdateEvent {
+        self.0.push(peak)
+    }
+
+    fn sort(&mut self) {
+        self.0.sort()
     }
 }
 
@@ -180,11 +186,11 @@ impl From<f64> for ErrorToleranceArg {
 
 impl<'a> FromPyObject<'a> for ErrorToleranceArg {
     fn extract(ob: &'a PyAny) -> PyResult<Self> {
-        if ob.is_instance_of::<PyFloat>()? {
+        if ob.is_instance_of::<PyFloat>() {
             Ok(ErrorToleranceArg(ob.extract()?))
-        } else if ob.is_instance_of::<Tolerance>()? {
+        } else if ob.is_instance_of::<Tolerance>() {
             Ok(ErrorToleranceArg(ob.extract()?))
-        } else if ob.is_instance_of::<PyString>()? {
+        } else if ob.is_instance_of::<PyString>() {
             let s: &str = ob.extract()?;
             match s.parse::<_Tolerance>() {
                 Ok(v) => Ok(ErrorToleranceArg(Tolerance(v))),
@@ -246,10 +252,10 @@ impl PyPeakSet {
             .collect())
     }
 
-    fn __getitem__(&self, i: &PyAny) -> PyResult<PyFittedPeak> {
-        if i.is_instance_of::<PySlice>()? {
+    fn __getitem__(&self, i: Bound<PyAny>) -> PyResult<PyFittedPeak> {
+        if i.is_instance_of::<PySlice>() {
             Err(PyTypeError::new_err("Could not select indices by slice"))
-        } else if i.is_instance_of::<PyLong>()? {
+        } else if i.is_instance_of::<PyLong>() {
             let i: usize = i.extract()?;
             if i >= self.len() {
                 Err(PyIndexError::new_err(i))
@@ -303,16 +309,17 @@ fn py_fit_full_width_at_half_max(
 #[pyfunction]
 #[pyo3(name = "denoise", signature = (mz_array, intensity_array, scale = 5.0, inplace = true))]
 fn py_denoise<'py>(
+    py: Python,
     mz_array: PyReadonlyArray1<f64>,
-    intensity_array: &'py PyArray1<f32>,
+    intensity_array: Bound<PyArray1<f32>>,
     scale: f32,
     inplace: bool,
 ) -> PyResult<Py<PyArray1<f32>>> {
     let mz_view = mz_array.as_slice()?;
     if inplace {
         unsafe {
-            let view = intensity_array.as_slice_mut()?;
-            let res = denoise(mz_view, view, scale);
+            let view = intensity_array.as_gil_ref().as_slice_mut()?;
+            let res = py.allow_threads(|| denoise(mz_view, view, scale));
             match res {
                 Ok(_view) => Ok(intensity_array.into()),
                 Err(_) => Err(PyException::new_err("An error occurred while denoising")),
@@ -320,12 +327,12 @@ fn py_denoise<'py>(
         }
     } else {
         let mut intensity_vec: Vec<f32> = intensity_array.extract()?;
-        let res = denoise(mz_view, intensity_vec.as_mut_slice(), scale);
+        let res = py.allow_threads(|| denoise(mz_view, intensity_vec.as_mut_slice(), scale));
         match res {
             Ok(_view) => {
                 let pyarray = Python::with_gil(|py| -> Py<PyArray1<f32>> {
-                    let result = PyArray1::from_iter(py, intensity_vec);
-                    result.to_owned()
+                    let result = PyArray1::from_vec_bound(py, intensity_vec);
+                    result.unbind()
                 });
                 Ok(pyarray)
             }
@@ -335,8 +342,9 @@ fn py_denoise<'py>(
 }
 
 #[pyfunction]
-#[pyo3(name = "average_signal", signature = (array_pairs, dx = 0.005))]
+#[pyo3(name = "average_signal", signature = (array_pairs, dx = 0.002))]
 fn py_average_signal(
+    py: Python<'_>,
     array_pairs: Vec<(PyReadonlyArray1<f64>, PyReadonlyArray1<f32>)>,
     dx: f64,
 ) -> PyResult<(Py<PyArray1<f64>>, Py<PyArray1<f32>>)> {
@@ -349,18 +357,20 @@ fn py_average_signal(
             )
         })
         .collect();
+    let new_arrays = py.allow_threads(|| {
+        let new_arrays = average_signal(&wrapped_pairs, dx);
+        new_arrays
+    });
 
-    let new_arrays = average_signal(&wrapped_pairs, dx);
-    Python::with_gil(|py| {
-        let x = new_arrays.mz_array.to_pyarray(py).into();
-        let y = new_arrays.intensity_array.to_pyarray(py).into();
-        Ok((x, y))
-    })
+    let x = new_arrays.mz_array.to_pyarray_bound(py).into();
+    let y = new_arrays.intensity_array.to_pyarray_bound(py).into();
+    Ok((x, y))
 }
 
 #[pyfunction]
 #[pyo3(name = "pick_peaks", signature = (mz_array, intensity_array, signal_to_noise_threshold=1.0))]
 fn py_pick_peaks(
+    py: Python,
     mz_array: PyReadonlyArray1<f64>,
     intensity_array: PyReadonlyArray1<f32>,
     signal_to_noise_threshold: f32,
@@ -369,13 +379,17 @@ fn py_pick_peaks(
         signal_to_noise_threshold,
         ..PeakPicker::default()
     };
+    let mz_array_ref = mz_array.as_slice()?;
+    let intensity_array_ref = intensity_array.as_slice()?;
 
     let mut acc = Vec::new();
-    let peaks_res =
-        picker.discover_peaks(mz_array.as_slice()?, intensity_array.as_slice()?, &mut acc);
+    let peaks_res = py.allow_threads(|| {
+        picker.discover_peaks(mz_array_ref, intensity_array_ref, &mut acc)
+    });
+
     match peaks_res {
         Ok(_) => {
-            let pypeaks: Vec<PyFittedPeak> = acc.into_iter().map(|p| PyFittedPeak(p)).collect();
+            let pypeaks: Vec<PyFittedPeak> = py.allow_threads(||{acc.into_iter().map(|p| PyFittedPeak(p)).collect()});
             return Ok(PyPeakSet::new(pypeaks));
         }
         Err(err) => match err {
@@ -390,19 +404,22 @@ fn py_pick_peaks(
 }
 
 #[pyfunction]
-#[pyo3(name = "reprofile", signature = (peaks, dx = 0.005))]
+#[pyo3(name = "reprofile", signature = (peaks, dx = 0.002))]
 fn py_reprofile(
-    peaks: Py<PyPeakSet>,
+    py: Python,
+    peaks: &PyPeakSet,
     dx: f64,
 ) -> (
     Py<PyArray<f64, Dim<[usize; 1]>>>,
     Py<PyArray<f32, Dim<[usize; 1]>>>,
 ) {
+    let pair = py.allow_threads(|| {
+        let pair = reprofile(peaks.0.iter().map(|p| &p.0), dx);
+        pair
+    });
     let (mz_array, intensity_array) = Python::with_gil(|py| {
-        let peak_set = peaks.borrow(py);
-        let pair = reprofile(peak_set.0.iter().map(|p| &p.0), dx);
-        let mz_array = pair.mz_array.to_pyarray(py).to_owned();
-        let intensity_array = pair.intensity_array.to_pyarray(py).to_owned();
+        let mz_array = pair.mz_array.to_pyarray_bound(py).unbind();
+        let intensity_array = pair.intensity_array.to_pyarray_bound(py).unbind();
         (mz_array, intensity_array)
     });
     (mz_array, intensity_array)
@@ -411,45 +428,53 @@ fn py_reprofile(
 #[pyfunction]
 #[pyo3(name = "moving_average", signature = (mz_array, intensity_array))]
 fn py_moving_average(
+    py: Python,
     #[allow(unused)] mz_array: PyReadonlyArray1<f64>,
     intensity_array: PyReadonlyArray1<f32>,
 ) -> PyResult<Py<PyArray<f32, Dim<[usize; 1]>>>> {
     let intensity_array_ = intensity_array.as_slice()?;
-    let mut new_intensity = Vec::with_capacity(intensity_array_.len());
-    new_intensity.resize(intensity_array_.len(), 0.0);
-    moving_average::<f32, 3>(intensity_array_, &mut new_intensity);
-    let new_py_intensity_array: Py<PyArray<f32, Dim<[usize; 1]>>> =
-        Python::with_gil(|py| new_intensity.to_pyarray(py).to_owned());
+    let new_intensity = py.allow_threads(|| {
+        let mut new_intensity = Vec::with_capacity(intensity_array_.len());
+        new_intensity.resize(intensity_array_.len(), 0.0);
+        moving_average::<f32, 3>(intensity_array_, &mut new_intensity);
+        new_intensity
+    });
+
+    let new_py_intensity_array: Py<PyArray<f32, Dim<[usize; 1]>>> = new_intensity.to_pyarray_bound(py).unbind();
     Ok(new_py_intensity_array)
 }
 
 #[pyfunction]
 #[pyo3(name = "savitsky_golay", signature = (mz_array, intensity_array, window_length = 5, poly_order=3, derivative = 0))]
 fn py_savitsky_golay(
+    py: Python,
     #[allow(unused)] mz_array: PyReadonlyArray1<f64>,
     intensity_array: PyReadonlyArray1<f32>,
     window_length: usize,
     poly_order: usize,
     derivative: usize,
 ) -> PyResult<Py<PyArray<f32, Dim<[usize; 1]>>>> {
-    let res = savitsky_golay::<f32>(
-        intensity_array.as_slice()?,
-        window_length,
-        poly_order,
-        derivative,
-    );
+    let intensity_array_ = intensity_array.as_slice()?;
+    let res = py.allow_threads(|| {
+        savitsky_golay::<f32>(
+            intensity_array_,
+            window_length,
+            poly_order,
+            derivative,
+        )
+    });
     let res = match res {
         Ok(arr) => arr,
         Err(e) => return Err(PyValueError::new_err(e.to_string())),
     };
 
-    let py_res = Python::with_gil(|py| res.to_pyarray(py).to_owned());
+    let py_res = res.to_pyarray_bound(py).unbind();
     Ok(py_res)
 }
 
 /// A Python module implemented in Rust.
 #[pymodule]
-fn pymzsignal(_py: Python, m: &PyModule) -> PyResult<()> {
+fn pymzsignal(_py: Python, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_approximate_signal_to_noise, m)?)?;
     m.add_function(wrap_pyfunction!(py_pick_peaks, m)?)?;
     m.add_function(wrap_pyfunction!(py_denoise, m)?)?;

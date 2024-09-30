@@ -253,6 +253,12 @@ impl PeakPicker {
             return Err(PeakPickerError::MZIntensityMismatch);
         }
 
+        assert!(start_index < mz_array.len());
+        assert!(start_index < intensity_array.len());
+
+        assert!(stop_index < mz_array.len());
+        assert!(stop_index < intensity_array.len());
+
         let mut partial_fit_state = PartialPeakFit::default();
 
         let mut index = start_index;

@@ -4,12 +4,15 @@ name: Test
 jobs:
 
   test:
-    name: Test Suite
+    name: Test Suite (nalgebra)
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest]
-        linalg-backend: ["intel-mkl", "nalgebra"]
+        os: [
+          ubuntu-latest,
+          macos-latest # macos-latest is now *always* ARM-based so Intel MKL won't build on it, and it won't have AVX
+        ]
+        feature_set: ["nalgebra", "nalgebra,avx"]
     steps:
       - name: Checkout sources
         uses: actions/checkout@v2
@@ -21,8 +24,31 @@ jobs:
           toolchain: stable
           override: true
 
-      - name: Run tests with ${{ matrix.linalg-backend }}
+      - name: Run tests with ${{ matrix.feature_set }}
         uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --no-default-features --features ${{ matrix.linalg-backend }}
+          args: --no-default-features --features ${{ matrix.feature_set }}
+  test_intel_mkl:
+    name: Test Suite (Intel MKL)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+        feature_set: ["intel-mkl", ]
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v2
+
+      - name: Install stable toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+
+      - name: Run tests with ${{ matrix.feature_set }}
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --no-default-features --features ${{ matrix.feature_set }}

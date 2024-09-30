@@ -44,6 +44,8 @@ pub fn trapz<
 ) -> B {
     let half = B::from(0.5).unwrap();
     let n = x.len();
+    assert!(x.len() < n - 2);
+    assert!(y.len() < n - 2);
     (0..n - 2)
         .map(|i| {
             let delta = x[i + 1] - x[i];
@@ -102,6 +104,12 @@ pub struct ArrayPair<'lifespan> {
     pub max_mz: f64,
 }
 
+impl<'lifespan> ArrayPair<'lifespan> {
+    pub fn iter(&'lifespan self) -> ArrayPairIter<'lifespan> {
+        ArrayPairIter::new(self)
+    }
+}
+
 
 /// A trait for abstracting over different flavors of [`ArrayPair`]-like types.
 pub trait ArrayPairLike {
@@ -114,10 +122,41 @@ pub trait ArrayPairLike {
     /// Find the index nearest to `mz`
     fn find(&self, mz: f64) -> usize {
         let mz_array = self.mz_array();
-        match mz_array.binary_search_by(|x| x.partial_cmp(&mz).unwrap()) {
-            Ok(i) => i.min(mz_array.len().saturating_sub(1)),
-            Err(i) => i.min(mz_array.len().saturating_sub(1)),
+        let n = mz_array.len().saturating_sub(1);
+        let mut j = match mz_array.binary_search_by(|x| x.partial_cmp(&mz).unwrap()) {
+            Ok(i) => i.min(n),
+            Err(i) => i.min(n),
+        };
+
+        let i = j;
+        let mut best = j;
+        let err = (mz_array[j] - mz).abs();
+        let mut best_err = err;
+        let n = n + 1;
+        // search backwards
+        while j > 0 && j < n {
+            let err = (mz_array[j] - mz).abs();
+            if err < best_err {
+                best_err = err;
+                best = j;
+            } else if err > best_err {
+                break;
+            }
+            j -= 1;
         }
+        j = i;
+        // search forwards
+        while j < n {
+            let err = (mz_array[j] - mz).abs();
+            if err < best_err {
+                best_err = err;
+                best = j;
+            } else if err > best_err {
+                break;
+            }
+            j += 1;
+        }
+        best
     }
 
     /// Select the slice of the m/z and intensity arrays between `low` m/z and `high` m/z
@@ -127,6 +166,12 @@ pub trait ArrayPairLike {
         let i_high = self.find(high);
         let mz_array = &self.mz_array()[i_low..i_high];
         let intensity_array = &self.intensity_array()[i_low..i_high];
+        (mz_array, intensity_array).into()
+    }
+
+    fn slice(&self, start: usize, end: usize) -> ArrayPair<'_> {
+        let mz_array = &self.mz_array()[start..end];
+        let intensity_array = &self.intensity_array()[start..end];
         (mz_array, intensity_array).into()
     }
 
@@ -188,17 +233,6 @@ impl<'lifespan> ArrayPair<'lifespan> {
             intensity_array,
             min_mz,
             max_mz,
-        }
-    }
-
-    /// Find the index nearest to `mz`
-    pub fn find(&self, mz: f64) -> usize {
-        match self
-            .mz_array
-            .binary_search_by(|x| x.partial_cmp(&mz).unwrap())
-        {
-            Ok(i) => i.min(self.mz_array.len().saturating_sub(1)),
-            Err(i) => i.min(self.mz_array.len().saturating_sub(1)),
         }
     }
 
@@ -355,4 +389,59 @@ impl<'lifespan> From<(Vec<f64>, Vec<f32>)> for ArrayPairSplit<'lifespan, 'lifesp
         let intensity_array = Cow::Owned(pair.1);
         ArrayPairSplit::new(mz_array, intensity_array)
     }
+}
+
+
+pub struct ArrayPairIter<'a> {
+    it_mz: std::slice::Iter<'a, f64>,
+    it_intens: std::slice::Iter<'a, f32>
+}
+
+impl<'a> Iterator for ArrayPairIter<'a> {
+    type Item = (f64, f32);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let mz = self.it_mz.next().copied();
+        let intens = self.it_intens.next().copied();
+        if let (Some(mz), Some(intens)) = (mz, intens) {
+            Some((mz, intens))
+        } else {
+            None
+        }
+    }
+}
+
+impl<'a> std::iter::FusedIterator for ArrayPairIter<'a> {}
+
+impl<'a> std::iter::ExactSizeIterator for ArrayPairIter<'a> {
+    fn len(&self) -> usize {
+        self.it_mz.len()
+    }
+}
+
+impl<'a> ArrayPairIter<'a> {
+    fn new(source: &'a ArrayPair<'a>) -> Self {
+        Self {
+            it_mz: source.mz_array.iter(),
+            it_intens: source.intensity_array.iter()
+        }
+    }
+}
+
+
+#[cfg(test)]
+mod test {
+
+    use super::*;
+    use crate::test_data::{X, Y};
+
+    #[test]
+    fn test_find() {
+        let arrays = ArrayPair::wrap(&X, &Y);
+        let i = arrays.find(179.0133881);
+        assert_eq!(i, 20);
+        let i = arrays.find(179.0233881);
+        assert_eq!(i, 20);
+    }
+
 }
