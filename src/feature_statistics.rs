@@ -4,7 +4,11 @@ use std::{
     f64::consts::{PI, SQRT_2},
     fmt::Debug,
     iter::FusedIterator,
+    marker::PhantomData,
+    ops::Range,
 };
+
+use crate::arrayops::trapz;
 
 pub struct PeakFitArgsIter<'a> {
     inner: std::iter::Zip<
@@ -40,13 +44,36 @@ impl<'a> PeakFitArgsIter<'a> {
     }
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, PartialOrd)]
+pub struct SplittingPoint {
+    pub first_maximum: f32,
+    pub minimum: f32,
+    pub second_maximum: f32,
+    pub minimum_index: f64,
+}
+
+impl SplittingPoint {
+    pub fn new(first_maximum: f32, minimum: f32, second_maximum: f32, minimum_index: f64) -> Self {
+        Self {
+            first_maximum,
+            minimum,
+            second_maximum,
+            minimum_index,
+        }
+    }
+
+    pub fn total_distance(&self) -> f32 {
+        (self.first_maximum - self.minimum) + (self.second_maximum - self.minimum)
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct PeakFitArgs<'a, 'b> {
     pub time: Cow<'a, [f64]>,
     pub intensity: Cow<'b, [f32]>,
 }
 
-impl<'a, 'b> PeakFitArgs<'a, 'b> {
+impl<'c, 'd, 'a: 'c, 'b: 'd, 'e: 'c + 'd> PeakFitArgs<'a, 'b> {
     pub fn new(time: Cow<'a, [f64]>, intensity: Cow<'b, [f32]>) -> Self {
         assert_eq!(
             time.len(),
@@ -56,6 +83,13 @@ impl<'a, 'b> PeakFitArgs<'a, 'b> {
             intensity.len()
         );
         Self { time, intensity }
+    }
+
+    pub fn smooth(&self, window_size: usize) -> PeakFitArgs<'a, 'd> {
+        let mut store = self.borrow();
+        let sink = store.intensity.to_mut();
+        crate::smooth::moving_average_dyn(&self.intensity, sink.as_mut_slice(), window_size);
+        store
     }
 
     pub fn peak_indices(&self, min_height: Option<f64>) -> Vec<usize> {
@@ -79,6 +113,164 @@ impl<'a, 'b> PeakFitArgs<'a, 'b> {
             }
         }
         indices
+    }
+
+    pub fn valley_indices(&self, max_height: Option<f64>) -> Vec<usize> {
+        let max_height = max_height.unwrap_or(f64::INFINITY) as f32;
+        let n = self.len();
+        let n1 = n.saturating_sub(1);
+        let mut indices = Vec::new();
+        for (i, y) in self
+            .intensity
+            .iter()
+            .copied()
+            .enumerate()
+            .take(n.saturating_sub(1))
+            .skip(1)
+        {
+            if y < max_height
+                && y <= self.intensity[i.saturating_sub(1)]
+                && y <= self.intensity[(i + 1).min(n1)]
+            {
+                indices.push(i);
+            }
+        }
+        indices
+    }
+
+    pub fn locate_extrema(&self, min_height: Option<f64>) -> Option<SplittingPoint> {
+        let maxima_indices = self.peak_indices(min_height);
+        let minima_indices = self.valley_indices(None);
+
+        let mut candidates = Vec::new();
+
+        for (i, max_i) in maxima_indices.iter().copied().enumerate() {
+            for j in (i + 1)..maxima_indices.len() {
+                let max_j = maxima_indices[j];
+                for min_k in minima_indices.iter().copied() {
+                    if self.time[max_i] > self.time[min_k] || self.time[min_k] > self.time[max_j] {
+                        continue;
+                    }
+                    let y_i = self.intensity[max_i];
+                    let y_j = self.intensity[max_j];
+                    let y_k = self.intensity[min_k];
+                    if max_i < min_k
+                        && min_k < max_j
+                        && (y_i - y_k) > (y_i * 0.01)
+                        && (y_j - y_k) > (y_j * 0.01)
+                    {
+                        candidates.push(SplittingPoint::new(y_i, y_k, y_j, self.time[min_k]));
+                    }
+                }
+            }
+        }
+        let split_point = candidates
+            .into_iter()
+            .max_by(|a, b| a.total_distance().total_cmp(&b.total_distance()));
+        split_point
+    }
+
+    pub fn slice(&'e self, iv: Range<usize>) -> PeakFitArgs<'c, 'd> {
+        let x = &self.time[iv.clone()];
+        let y = &self.intensity[iv.clone()];
+        (x, y).into()
+    }
+
+    pub fn subtract(&mut self, intensities: &[f64]) {
+        assert_eq!(self.intensity.len(), intensities.len());
+
+        self.intensity
+            .to_mut()
+            .iter_mut()
+            .zip(intensities.iter())
+            .for_each(|(a, b)| {
+                *a -= (*b) as f32;
+            });
+    }
+
+    pub fn subtract_region(&mut self, time: Cow<'a, [f64]>, intensities: &[f64]) {
+        let t_first = *time.first().unwrap();
+        let i_first = self.find_time(t_first);
+        self.intensity
+            .to_mut()
+            .iter_mut()
+            .skip(i_first)
+            .zip(intensities.iter())
+            .for_each(|(a, b)| {
+                *a -= (*b) as f32;
+            });
+    }
+
+    pub fn split_at(&'e self, split_points: &[SplittingPoint]) -> Vec<Range<usize>> {
+        let n = self.len();
+        let mut segments = Vec::new();
+        let mut last_x = self.time.first().copied().unwrap_or_default() - 1.0;
+        for point in split_points {
+            let start_i = self
+                .time
+                .iter()
+                .position(|t| *t > last_x && *t <= point.minimum_index)
+                .unwrap_or_default();
+            let end_i = self
+                .time
+                .iter()
+                .rposition(|t| *t > last_x && *t <= point.minimum_index)
+                .unwrap_or_default();
+            if start_i != end_i {
+                segments.push(start_i..(end_i + 1).min(n));
+            }
+            last_x = point.minimum_index;
+        }
+
+        let i = self.time.iter().position(|t| *t > last_x).unwrap_or(n);
+        if i != n {
+            segments.push(i..n);
+        }
+        segments
+    }
+
+    /// Find the index nearest to `time`
+    pub fn find_time(&self, time: f64) -> usize {
+        let time_array = &self.time;
+        let n = time_array.len().saturating_sub(1);
+        let mut j = match time_array.binary_search_by(|x| x.partial_cmp(&time).unwrap()) {
+            Ok(i) => i.min(n),
+            Err(i) => i.min(n),
+        };
+
+        let i = j;
+        let mut best = j;
+        let err = (time_array[j] - time).abs();
+        let mut best_err = err;
+        let n = n + 1;
+        // search backwards
+        while j > 0 && j < n {
+            let err = (time_array[j] - time).abs();
+            if err < best_err {
+                best_err = err;
+                best = j;
+            } else if err > best_err {
+                break;
+            }
+            j -= 1;
+        }
+        j = i;
+        // search forwards
+        while j < n {
+            let err = (time_array[j] - time).abs();
+            if err < best_err {
+                best_err = err;
+                best = j;
+            } else if err > best_err {
+                break;
+            }
+            j += 1;
+        }
+        best
+    }
+
+    pub fn integrate(&self) -> f32 {
+        trapz(&self.time, &self.intensity)
     }
 
     pub fn weighted_mean_time(&self) -> f64 {
@@ -179,6 +371,12 @@ impl From<(Vec<f64>, Vec<f32>)> for PeakFitArgs<'static, 'static> {
         let mz_array = Cow::Owned(pair.0);
         let intensity_array = Cow::Owned(pair.1);
         PeakFitArgs::new(mz_array, intensity_array)
+    }
+}
+
+impl<'a, 'b> From<PeakFitArgs<'a, 'b>> for crate::arrayops::ArrayPairSplit<'a, 'b> {
+    fn from(value: PeakFitArgs<'a, 'b>) -> Self {
+        (value.time, value.intensity).into()
     }
 }
 
@@ -307,12 +505,24 @@ pub trait PeakShapeModel: Clone {
         times.into_iter().map(|t| self.density(t))
     }
 
+    fn gradient(&self, data: &PeakFitArgs) -> Self;
+
+    fn loss(&self, data: &PeakFitArgs) -> f64 {
+        data.iter()
+            .map(|(t, i)| (i - self.density(t)).powi(2))
+            .sum::<f64>()
+            / data.len() as f64
+    }
+
     fn residuals<'a, 'b>(&self, data: &PeakFitArgs<'a, 'b>) -> PeakFitArgs<'a, 'b> {
         let mut data = data.borrow();
-        for (yhat, y) in self.predict_iter(data.time.iter().copied()).zip(data.intensity.to_mut().iter_mut()) {
+        for (yhat, y) in self
+            .predict_iter(data.time.iter().copied())
+            .zip(data.intensity.to_mut().iter_mut())
+        {
             *y -= yhat as f32;
             if *y < 0.0 {
-                *y =  0.0;
+                *y = 0.0;
             }
         }
         data
@@ -329,6 +539,8 @@ pub trait PeakShapeModel: Clone {
         let line_test = shape_resid / linear_resid;
         1.0 - line_test.max(1e-5)
     }
+
+    fn guess(args: &PeakFitArgs) -> Self;
 
     fn fit(&mut self, args: PeakFitArgs) -> ModelFitResult {
         self.fit_with(args, Default::default())
@@ -348,6 +560,37 @@ pub struct GaussianPeakShape {
 }
 
 impl GaussianPeakShape {
+    pub fn new(mu: f64, sigma: f64, amplitude: f64) -> Self {
+        Self {
+            mu,
+            sigma,
+            amplitude,
+        }
+    }
+
+    pub fn guess(data: &PeakFitArgs) -> Self {
+        if data.len() == 0 {
+            return Self::new(1.0, 1.0, 1.0);
+        }
+        let idx = data.argmax();
+        let mu = data.time[idx];
+        let amplitude = data.intensity[idx] as f64;
+        let sigma = 1.0;
+        Self::new(mu, sigma, amplitude)
+    }
+
+    pub fn regularization(&self) -> f64 {
+        self.mu + self.sigma
+    }
+
+    pub fn loss(&self, data: &PeakFitArgs) -> f64 {
+        data.iter()
+            .map(|(t, i)| (i - self.density(t)).powi(2))
+            .sum::<f64>()
+            / data.len() as f64
+            + self.regularization()
+    }
+
     pub fn density(&self, x: f64) -> f64 {
         self.amplitude * (-0.5 * (x - self.mu).powi(2) / self.sigma.powi(2)).exp()
     }
@@ -364,100 +607,15 @@ impl GaussianPeakShape {
         vec![self.mu, self.sigma, self.amplitude]
     }
 
-    pub fn gradient_update(&mut self, gradient: Self, learning_rate: f64) {
-        self.mu -= gradient.mu * learning_rate;
-        self.sigma -= gradient.sigma * learning_rate;
-        self.amplitude -= gradient.amplitude * learning_rate;
-    }
-}
-
-impl PeakShapeModel for GaussianPeakShape {
-    type Fitter<'a, 'b> = GaussianPeakShapeFitter<'a, 'b>;
-
-    fn density(&self, x: f64) -> f64 {
-        self.density(x)
-    }
-
-    fn gradient_update(&mut self, gradient: Self, learning_rate: f64) {
-        self.gradient_update(gradient, learning_rate);
-    }
-}
-
-impl<'a, 'b> PeakShapeModelFitter<'a, 'b> for GaussianPeakShapeFitter<'a, 'b> {
-    type ModelType = GaussianPeakShape;
-
-    fn from_args(args: PeakFitArgs<'a, 'b>) -> Self {
-        Self::new(args)
-    }
-
-    fn gradient(&self, params: &Self::ModelType) -> Self::ModelType {
-        self.gradient(params)
-    }
-
-    fn loss(&self, params: &Self::ModelType) -> f64 {
-        self.loss(params)
-    }
-
-    fn data(&self) -> &PeakFitArgs {
-        &self.data
-    }
-}
-
-#[derive(Debug)]
-pub struct GaussianPeakShapeFitter<'a, 'b> {
-    pub data: PeakFitArgs<'a, 'b>,
-}
-
-impl<'a, 'b> GaussianPeakShapeFitter<'a, 'b> {
-    pub fn new(data: PeakFitArgs<'a, 'b>) -> Self {
-        Self { data }
-    }
-
-    pub fn loss(&self, model: &GaussianPeakShape) -> f64 {
-        let loss = self
-            .iter()
-            .map(|(t, y)| (y - model.density(t)).powf(2.0))
-            .sum::<f64>()
-            + (model.mu + model.sigma);
-        loss / self.data.len() as f64
-    }
-
-    pub fn gradient(&self, model: &GaussianPeakShape) -> GaussianPeakShape {
-        let mut g = [
-            self.mu_gradient(&model),
-            self.sigma_gradient(&model),
-            self.amplitude_gradient(&model),
-        ];
-        let gradnorm: f64 = g.iter().map(|f| f.abs()).sum::<f64>() / g.len() as f64;
-        if gradnorm > 1.0 {
-            g[0] /= gradnorm;
-            g[1] /= gradnorm;
-        }
-        GaussianPeakShape::from_slice(&g)
-    }
-
-    pub fn len(&self) -> usize {
-        self.data.len()
-    }
-
-    pub fn iter(&self) -> PeakFitArgsIter<'_> {
-        self.data.iter()
-    }
-
-    pub fn apply(&self, param: &GaussianPeakShape) -> Vec<f64> {
-        self.data.iter().map(|(t, _i)| param.density(t)).collect()
-    }
-
-    pub fn mu_gradient(&self, param: &GaussianPeakShape) -> f64 {
-        let amp = param.amplitude;
-        let mu = param.mu;
-        let sigma = param.sigma;
+    pub fn mu_gradient(&self, data: &PeakFitArgs) -> f64 {
+        let amp = self.amplitude;
+        let mu = self.mu;
+        let sigma = self.sigma;
 
         let two_mu = 2.0 * mu;
         let sigma_squared = sigma.powi(2);
 
-        let grad: f64 = self
-            .data
+        let grad: f64 = data
             .iter()
             .map(|(x, y)| {
                 let mu_sub_x_squared = (-mu + x).powi(2);
@@ -474,19 +632,18 @@ impl<'a, 'b> GaussianPeakShapeFitter<'a, 'b> {
             })
             .sum();
 
-        grad / self.data.len() as f64
+        grad / data.len() as f64
     }
 
-    pub fn sigma_gradient(&self, param: &GaussianPeakShape) -> f64 {
-        let amp = param.amplitude;
-        let mu = param.mu;
-        let sigma = param.sigma;
+    pub fn sigma_gradient(&self, data: &PeakFitArgs) -> f64 {
+        let amp = self.amplitude;
+        let mu = self.mu;
+        let sigma = self.sigma;
 
         let sigma_squared = sigma.powi(2);
         let sigma_cubed = sigma.powi(3);
 
-        let grad: f64 = self
-            .data
+        let grad: f64 = data
             .iter()
             .map(|(x, y)| {
                 let mu_sub_x_squared = (-mu + x).powi(2);
@@ -503,18 +660,17 @@ impl<'a, 'b> GaussianPeakShapeFitter<'a, 'b> {
             })
             .sum();
 
-        grad / self.data.len() as f64
+        grad / data.len() as f64
     }
 
-    pub fn amplitude_gradient(&self, param: &GaussianPeakShape) -> f64 {
-        let amp = param.amplitude;
-        let mu = param.mu;
-        let sigma = param.sigma;
+    pub fn amplitude_gradient(&self, data: &PeakFitArgs) -> f64 {
+        let amp = self.amplitude;
+        let mu = self.mu;
+        let sigma = self.sigma;
 
         let sigma_squared = sigma.powi(2);
 
-        let grad: f64 = self
-            .data
+        let grad: f64 = data
             .iter()
             .map(|(x, y)| {
                 let mu_sub_x_squared = (-mu + x).powi(2);
@@ -528,7 +684,56 @@ impl<'a, 'b> GaussianPeakShapeFitter<'a, 'b> {
             })
             .sum();
 
-        grad / self.data.len() as f64
+        grad / data.len() as f64
+    }
+
+    pub fn gradient(&self, data: &PeakFitArgs) -> Self {
+        let mut g = [
+            self.mu_gradient(&data),
+            self.sigma_gradient(&data),
+            self.amplitude_gradient(&data),
+        ];
+        let gradnorm: f64 = g.iter().map(|f| f.abs()).sum::<f64>() / g.len() as f64;
+        if gradnorm > 1.0 {
+            g[0] /= gradnorm;
+            g[1] /= gradnorm;
+        }
+
+        Self::new(g[0], g[1], g[2])
+    }
+
+    pub fn gradient_update(&mut self, gradient: Self, learning_rate: f64) {
+        self.mu -= gradient.mu * learning_rate;
+        self.sigma -= gradient.sigma * learning_rate;
+        self.amplitude -= gradient.amplitude * learning_rate;
+    }
+}
+
+impl PeakShapeModel for GaussianPeakShape {
+    type Fitter<'a, 'b> = PeakShapeFitter<'a, 'b, Self>;
+
+    fn density(&self, x: f64) -> f64 {
+        self.density(x)
+    }
+
+    fn gradient_update(&mut self, gradient: Self, learning_rate: f64) {
+        self.gradient_update(gradient, learning_rate);
+    }
+
+    fn guess(args: &PeakFitArgs) -> Self {
+        Self::guess(args)
+    }
+
+    fn gradient(&self, data: &PeakFitArgs) -> Self {
+        self.gradient(data)
+    }
+
+    fn loss(&self, data: &PeakFitArgs) -> f64 {
+        data.iter()
+            .map(|(t, i)| (i - self.density(t)).powi(2))
+            .sum::<f64>()
+            / data.len() as f64
+            + self.regularization()
     }
 }
 
@@ -550,6 +755,18 @@ impl SkewedGaussianPeakShape {
         }
     }
 
+    pub fn guess(data: &PeakFitArgs) -> Self {
+        if data.len() == 0 {
+            return Self::new(1.0, 1.0, 1.0, 1.0);
+        }
+        let idx = data.argmax();
+        let mu = data.time[idx];
+        let amplitude = data.intensity[idx] as f64;
+        let sigma = 1.0;
+        let lambda = 1.0;
+        Self::new(mu, sigma, amplitude, lambda)
+    }
+
     pub fn density(&self, x: f64) -> f64 {
         self.amplitude
             * (erf(SQRT_2 * self.lambda * (-self.mu + x) / (2.0 * self.sigma)) + 1.0)
@@ -565,58 +782,20 @@ impl SkewedGaussianPeakShape {
         }
     }
 
+    pub fn regularization(&self) -> f64 {
+        self.mu + self.sigma + self.lambda
+    }
+
     pub fn to_vec(&self) -> Vec<f64> {
         vec![self.mu, self.sigma, self.amplitude, self.lambda]
     }
 
-    pub fn gradient_update(&mut self, gradient: Self, learning_rate: f64) {
-        self.mu -= gradient.mu * learning_rate;
-        self.sigma -= gradient.sigma * learning_rate;
-        self.amplitude -= gradient.amplitude * learning_rate;
-        if self.amplitude < 0.0 {
-            self.amplitude = 0.0
-        }
-        self.lambda -= gradient.lambda * learning_rate;
-    }
-}
-
-impl PeakShapeModel for SkewedGaussianPeakShape {
-    type Fitter<'a, 'b> = SkewedGaussianPeakShapeFitter<'a, 'b>;
-
-    fn density(&self, x: f64) -> f64 {
-        self.density(x)
-    }
-
-    fn gradient_update(&mut self, gradient: Self, learning_rate: f64) {
-        self.gradient_update(gradient, learning_rate);
-    }
-}
-
-#[derive(Debug)]
-pub struct SkewedGaussianPeakShapeFitter<'a, 'b> {
-    pub data: PeakFitArgs<'a, 'b>,
-}
-
-impl<'a, 'b> SkewedGaussianPeakShapeFitter<'a, 'b> {
-    pub fn new(data: PeakFitArgs<'a, 'b>) -> Self {
-        Self { data }
-    }
-
-    pub fn loss(&self, model: &SkewedGaussianPeakShape) -> f64 {
-        let loss = self
-            .iter()
-            .map(|(t, y)| (y - model.density(t)).powi(2))
-            .sum::<f64>()
-            + (model.mu + model.sigma);
-        loss / self.data.len() as f64
-    }
-
-    pub fn gradient(&self, model: &SkewedGaussianPeakShape) -> SkewedGaussianPeakShape {
+    pub fn gradient(&self, data: &PeakFitArgs) -> SkewedGaussianPeakShape {
         let mut g = [
-            self.mu_gradient(&model),
-            self.sigma_gradient(&model),
-            self.amplitude_gradient(&model),
-            self.lambda_gradient(&model),
+            self.mu_gradient(&data),
+            self.sigma_gradient(&data),
+            self.amplitude_gradient(&data),
+            self.lambda_gradient(&data),
         ];
         let gradnorm: f64 = g.iter().map(|f| f.abs()).sum::<f64>() / g.len() as f64;
         if gradnorm > 1.0 {
@@ -624,26 +803,15 @@ impl<'a, 'b> SkewedGaussianPeakShapeFitter<'a, 'b> {
             g[1] /= gradnorm;
             g[3] /= gradnorm;
         }
-        SkewedGaussianPeakShape::from_slice(&g)
+
+        SkewedGaussianPeakShape::new(g[0], g[1], g[2], g[3])
     }
 
-    pub fn len(&self) -> usize {
-        self.data.len()
-    }
-
-    pub fn iter(&self) -> PeakFitArgsIter<'_> {
-        self.data.iter()
-    }
-
-    pub fn apply(&self, param: &SkewedGaussianPeakShape) -> Vec<f64> {
-        self.data.iter().map(|(t, _i)| param.density(t)).collect()
-    }
-
-    pub fn mu_gradient(&self, param: &SkewedGaussianPeakShape) -> f64 {
-        let amp = param.amplitude;
-        let mu = param.mu;
-        let sigma = param.sigma;
-        let lam = param.lambda;
+    pub fn mu_gradient(&self, data: &PeakFitArgs) -> f64 {
+        let amp = self.amplitude;
+        let mu = self.mu;
+        let sigma = self.sigma;
+        let lam = self.lambda;
 
         let two_sigma = sigma * 2.0;
         let sigma_square = sigma.powi(2);
@@ -653,7 +821,7 @@ impl<'a, 'b> SkewedGaussianPeakShapeFitter<'a, 'b> {
         let neg_half_lam_squared = -1_f64 / 2.0 * lam.powi(2);
 
         let mut grad = 0.0;
-        for (x, y) in self.data.iter() {
+        for (x, y) in data.iter() {
             grad += (-amp
                 * (erf(sqrt_2_lam * (-mu + x) / (two_sigma)) + 1.0)
                 * (-0.5 * (-mu + x).powi(2) / sigma_square).exp()
@@ -669,14 +837,14 @@ impl<'a, 'b> SkewedGaussianPeakShapeFitter<'a, 'b> {
                         / sigma_square)
                 + 1.0
         }
-        grad / self.data.len() as f64
+        grad / data.len() as f64
     }
 
-    pub fn sigma_gradient(&self, param: &SkewedGaussianPeakShape) -> f64 {
-        let amp = param.amplitude;
-        let mu = param.mu;
-        let sigma = param.sigma;
-        let lam = param.lambda;
+    pub fn sigma_gradient(&self, data: &PeakFitArgs) -> f64 {
+        let amp = self.amplitude;
+        let mu = self.mu;
+        let sigma = self.sigma;
+        let lam = self.lambda;
 
         let two_sigma = sigma * 2.0;
         let sigma_square = sigma.powi(2);
@@ -687,7 +855,7 @@ impl<'a, 'b> SkewedGaussianPeakShapeFitter<'a, 'b> {
         let neg_half_lam_squared = -1_f64 / 2.0 * lam.powi(2);
 
         let mut grad = 0.0;
-        for (x, y) in self.data.iter() {
+        for (x, y) in data.iter() {
             grad += (-amp
                 * (erf(sqrt_2_lam * (-mu + x) / two_sigma) + 1.0)
                 * (-0.5 * (-mu + x).powi(2) / sigma_square).exp()
@@ -705,21 +873,21 @@ impl<'a, 'b> SkewedGaussianPeakShapeFitter<'a, 'b> {
                         / sigma_cubed)
                 + 1.0
         }
-        grad / self.data.len() as f64
+        grad / data.len() as f64
     }
 
-    pub fn amplitude_gradient(&self, param: &SkewedGaussianPeakShape) -> f64 {
-        let amp = param.amplitude;
-        let mu = param.mu;
-        let sigma = param.sigma;
-        let lam = param.lambda;
+    pub fn amplitude_gradient(&self, data: &PeakFitArgs) -> f64 {
+        let amp = self.amplitude;
+        let mu = self.mu;
+        let sigma = self.sigma;
+        let lam = self.lambda;
 
         let two_sigma = sigma * 2.0;
         let sigma_square = sigma.powi(2);
         let sqrt_2_lam = SQRT_2 * lam;
 
-        let mut grad = 0.0;
-        for (x, y) in self.data.iter() {
+        let mut grad: f64 = 0.0;
+        for (x, y) in data.iter() {
             grad += -2.0
                 * (-amp
                     * (erf(sqrt_2_lam * (-mu + x) / (two_sigma)) + 1.0)
@@ -728,14 +896,14 @@ impl<'a, 'b> SkewedGaussianPeakShapeFitter<'a, 'b> {
                 * (erf(sqrt_2_lam * (-mu + x) / (two_sigma)) + 1.0)
                 * (-0.5 * (-mu + x).powi(2) / sigma_square).exp()
         }
-        grad / self.data.len() as f64
+        grad / data.len() as f64
     }
 
-    pub fn lambda_gradient(&self, param: &SkewedGaussianPeakShape) -> f64 {
-        let amp = param.amplitude;
-        let mu = param.mu;
-        let sigma = param.sigma;
-        let lam = param.lambda;
+    pub fn lambda_gradient(&self, data: &PeakFitArgs) -> f64 {
+        let amp = self.amplitude;
+        let mu = self.mu;
+        let sigma = self.sigma;
+        let lam = self.lambda;
 
         let two_sigma = sigma * 2.0;
         let sigma_square = sigma.powi(2);
@@ -745,7 +913,7 @@ impl<'a, 'b> SkewedGaussianPeakShapeFitter<'a, 'b> {
         let neg_half_lam_squared = -1_f64 / 2.0 * lam.powi(2);
 
         let mut grad = 0.0;
-        for (x, y) in self.data.iter() {
+        for (x, y) in data.iter() {
             let mu_sub_x = -mu + x;
             let mu_sub_x_squared = mu_sub_x.powi(2);
             let neg_half_mu_sub_x_squared_div_sigma_squared =
@@ -762,23 +930,262 @@ impl<'a, 'b> SkewedGaussianPeakShapeFitter<'a, 'b> {
                 / sqrt_pi_sigma
                 + 1.0
         }
-        grad / self.data.len() as f64
+        grad / data.len() as f64
+    }
+
+    pub fn gradient_update(&mut self, gradient: Self, learning_rate: f64) {
+        self.mu -= gradient.mu * learning_rate;
+        self.sigma -= gradient.sigma * learning_rate;
+        self.amplitude -= gradient.amplitude * learning_rate;
+        if self.amplitude < 0.0 {
+            self.amplitude = 0.0
+        }
+        self.lambda -= gradient.lambda * learning_rate;
     }
 }
 
-impl<'a, 'b> PeakShapeModelFitter<'a, 'b> for SkewedGaussianPeakShapeFitter<'a, 'b> {
-    type ModelType = SkewedGaussianPeakShape;
+impl PeakShapeModel for SkewedGaussianPeakShape {
+    type Fitter<'a, 'b> = PeakShapeFitter<'a, 'b, Self>;
+
+    fn density(&self, x: f64) -> f64 {
+        self.density(x)
+    }
+
+    fn gradient_update(&mut self, gradient: Self, learning_rate: f64) {
+        self.gradient_update(gradient, learning_rate);
+    }
+
+    fn guess(args: &PeakFitArgs) -> Self {
+        Self::guess(args)
+    }
+
+    fn gradient(&self, data: &PeakFitArgs) -> Self {
+        self.gradient(data)
+    }
+
+    fn loss(&self, data: &PeakFitArgs) -> f64 {
+        data.iter()
+            .map(|(t, i)| (i - self.density(t)).powi(2))
+            .sum::<f64>()
+            / data.len() as f64
+            + self.regularization()
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct BiGaussianPeakShape {
+    pub mu: f64,
+    pub sigma_low: f64,
+    pub sigma_high: f64,
+    pub amplitude: f64,
+}
+
+impl BiGaussianPeakShape {
+    pub fn new(mu: f64, sigma_low: f64, sigma_high: f64, amplitude: f64) -> Self {
+        Self {
+            mu,
+            sigma_low,
+            sigma_high,
+            amplitude,
+        }
+    }
+
+    pub fn guess(data: &PeakFitArgs) -> Self {
+        if data.len() == 0 {
+            return Self::new(1.0, 1.0, 1.0, 1.0);
+        }
+        let idx = data.argmax();
+        let mu = data.time[idx];
+        let amplitude = data.intensity[idx] as f64;
+        let sigma = 1.0;
+        Self::new(mu, sigma, sigma, amplitude)
+    }
+
+    pub fn density(&self, x: f64) -> f64 {
+        if self.mu >= x {
+            self.amplitude * (-1_f64 / 2.0 * (-self.mu + x).powi(2) / self.sigma_low.powi(2)).exp()
+        } else {
+            self.amplitude * (-1_f64 / 2.0 * (-self.mu + x).powi(2) / self.sigma_high.powi(2)).exp()
+        }
+    }
+
+    pub fn gradient_update(&mut self, gradient: Self, learning_rate: f64) {
+        self.mu -= gradient.mu * learning_rate;
+        self.sigma_low -= gradient.sigma_low * learning_rate;
+        self.sigma_high -= gradient.sigma_high * learning_rate;
+
+        self.amplitude -= gradient.amplitude * learning_rate;
+        if self.amplitude < 0.0 {
+            self.amplitude = 0.0
+        }
+    }
+
+    pub fn regularization(&self) -> f64 {
+        self.mu + self.sigma_low + self.sigma_high
+    }
+
+    pub fn gradient(&self, data: &PeakFitArgs) -> BiGaussianPeakShape {
+        let mut g = [
+            self.gradient_mu(&data),
+            self.gradient_sigma_low(&data),
+            self.gradient_sigma_high(&data),
+            self.gradient_amplitude(&data),
+        ];
+        let gradnorm: f64 = g.iter().map(|f| f.abs()).sum::<f64>() / g.len() as f64;
+        if gradnorm > 1.0 {
+            g[0] /= gradnorm;
+            g[1] /= gradnorm;
+            g[2] /= gradnorm;
+        }
+        BiGaussianPeakShape::new(g[0], g[1], g[2], g[3])
+    }
+
+    fn gradient_mu(&self, data: &PeakFitArgs) -> f64 {
+        let mu = self.mu;
+        let amp = self.amplitude;
+        let sigma_low = self.sigma_low;
+        let sigma_high = self.sigma_high;
+
+        data.iter()
+            .map(|(x, y)| {
+                -2.0 * (y - if mu >= x {
+                    amp * (-0.5 * (-mu + x).powi(2) / sigma_low.powi(2)).exp()
+                } else {
+                    amp * (-0.5 * (-mu + x).powi(2) / sigma_high.powi(2)).exp()
+                }) * if mu >= x {
+                    -0.5 * amp
+                        * (2.0 * mu - 2.0 * x)
+                        * (-0.5 * (-mu + x).powi(2) / sigma_low.powi(2)).exp()
+                        / sigma_low.powi(2)
+                } else {
+                    -0.5 * amp
+                        * (2.0 * mu - 2.0 * x)
+                        * (-0.5 * (-mu + x).powi(2) / sigma_high.powi(2)).exp()
+                        / sigma_high.powi(2)
+                } + 1.0
+            })
+            .sum::<f64>()
+            / data.len() as f64
+    }
+
+    fn gradient_sigma_high(&self, data: &PeakFitArgs) -> f64 {
+        let mu = self.mu;
+        let amp = self.amplitude;
+        let sigma_low = self.sigma_low;
+        let sigma_high = self.sigma_high;
+
+        data.iter()
+            .map(|(x, y)| {
+                -2.0 * (y - if mu >= x {
+                    amp * (-1_f64 / 2.0 * (-mu + x).powi(2) / sigma_low.powi(2)).exp()
+                } else {
+                    amp * (-1_f64 / 2.0 * (-mu + x).powi(2) / sigma_high.powi(2)).exp()
+                }) * if mu >= x {
+                    0.0
+                } else {
+                    amp * (-mu + x).powi(2)
+                        * (-1_f64 / 2.0 * (-mu + x).powi(2) / sigma_high.powi(2)).exp()
+                        / sigma_high.powi(3)
+                } + 1.0
+            })
+            .sum::<f64>()
+            / data.len() as f64
+    }
+
+    fn gradient_sigma_low(&self, data: &PeakFitArgs) -> f64 {
+        let mu = self.mu;
+        let amp = self.amplitude;
+        let sigma_low = self.sigma_low;
+        let sigma_high = self.sigma_high;
+
+        data.iter()
+            .map(|(x, y)| {
+                -2.0 * (y - if mu >= x {
+                    amp * (-1_f64 / 2.0 * (-mu + x).powi(2) / sigma_low.powi(2)).exp()
+                } else {
+                    amp * (-1_f64 / 2.0 * (-mu + x).powi(2) / sigma_high.powi(2)).exp()
+                }) * if mu >= x {
+                    amp * (-mu + x).powi(2)
+                        * (-1_f64 / 2.0 * (-mu + x).powi(2) / sigma_low.powi(2)).exp()
+                        / sigma_low.powi(3)
+                } else {
+                    0.0
+                } + 1.0
+            })
+            .sum::<f64>()
+            / data.len() as f64
+    }
+
+    fn gradient_amplitude(&self, data: &PeakFitArgs) -> f64 {
+        let mu = self.mu;
+        let amp = self.amplitude;
+        let sigma_low = self.sigma_low;
+        let sigma_high = self.sigma_high;
+
+        data.iter()
+            .map(|(x, y)| {
+                -2.0 * (y - if mu >= x {
+                    amp * (-1_f64 / 2.0 * (-mu + x).powi(2) / sigma_low.powi(2)).exp()
+                } else {
+                    amp * (-1_f64 / 2.0 * (-mu + x).powi(2) / sigma_high.powi(2)).exp()
+                }) * if mu >= x {
+                    (-1_f64 / 2.0 * (-mu + x).powi(2) / sigma_low.powi(2)).exp()
+                } else {
+                    (-1_f64 / 2.0 * (-mu + x).powi(2) / sigma_high.powi(2)).exp()
+                }
+            })
+            .sum::<f64>()
+            / data.len() as f64
+    }
+}
+
+impl PeakShapeModel for BiGaussianPeakShape {
+    type Fitter<'a, 'b> = PeakShapeFitter<'a, 'b, Self>;
+
+    fn density(&self, x: f64) -> f64 {
+        self.density(x)
+    }
+
+    fn gradient_update(&mut self, gradient: Self, learning_rate: f64) {
+        self.gradient_update(gradient, learning_rate);
+    }
+
+    fn guess(args: &PeakFitArgs) -> Self {
+        Self::guess(args)
+    }
+
+    fn loss(&self, data: &PeakFitArgs) -> f64 {
+        data.iter()
+            .map(|(t, i)| (i - self.density(t)).powi(2))
+            .sum::<f64>()
+            / data.len() as f64
+            + self.regularization()
+    }
+
+    fn gradient(&self, data: &PeakFitArgs) -> Self {
+        self.gradient(data)
+    }
+}
+
+#[derive(Debug)]
+pub struct PeakShapeFitter<'a, 'b, T: PeakShapeModel> {
+    pub data: PeakFitArgs<'a, 'b>,
+    _t: PhantomData<T>,
+}
+
+impl<'a, 'b, T: PeakShapeModel> PeakShapeModelFitter<'a, 'b> for PeakShapeFitter<'a, 'b, T> {
+    type ModelType = T;
 
     fn from_args(args: PeakFitArgs<'a, 'b>) -> Self {
         Self::new(args)
     }
 
     fn gradient(&self, params: &Self::ModelType) -> Self::ModelType {
-        self.gradient(params)
+        params.gradient(&self.data)
     }
 
     fn loss(&self, params: &Self::ModelType) -> f64 {
-        self.loss(params)
+        params.loss(&self.data)
     }
 
     fn data(&self) -> &PeakFitArgs {
@@ -786,17 +1193,271 @@ impl<'a, 'b> PeakShapeModelFitter<'a, 'b> for SkewedGaussianPeakShapeFitter<'a, 
     }
 }
 
+impl<'a, 'b, T: PeakShapeModel> PeakShapeFitter<'a, 'b, T> {
+    pub fn new(data: PeakFitArgs<'a, 'b>) -> Self {
+        Self {
+            data,
+            _t: PhantomData,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum PeakShape {
     Gaussian(GaussianPeakShape),
     SkewedGaussian(SkewedGaussianPeakShape),
+    BiGaussian(BiGaussianPeakShape),
 }
 
+macro_rules! dispatch_peak {
+    ($d:ident, $r:ident, $e:expr) => {
+        match $d {
+            PeakShape::Gaussian($r) => $e,
+            PeakShape::SkewedGaussian($r) => $e,
+            PeakShape::BiGaussian($r) => $e,
+        }
+    };
+}
 
+impl PeakShape {
+    pub fn gaussian(data: &PeakFitArgs) -> Self {
+        Self::Gaussian(GaussianPeakShape::guess(data))
+    }
+
+    pub fn skewed_gaussian(data: &PeakFitArgs) -> Self {
+        Self::SkewedGaussian(SkewedGaussianPeakShape::guess(data))
+    }
+
+    pub fn bigaussian(data: &PeakFitArgs) -> Self {
+        Self::BiGaussian(BiGaussianPeakShape::guess(data))
+    }
+
+    pub fn density(&self, x: f64) -> f64 {
+        dispatch_peak!(self, p, p.density(x))
+    }
+
+    pub fn predict(&self, times: &[f64]) -> Vec<f64> {
+        dispatch_peak!(self, p, p.predict(times))
+    }
+
+    pub fn residuals<'a, 'b>(&self, data: &PeakFitArgs<'a, 'b>) -> PeakFitArgs<'a, 'b> {
+        dispatch_peak!(self, p, p.residuals(data))
+    }
+
+    pub fn score(&self, data: &PeakFitArgs) -> f64 {
+        dispatch_peak!(self, p, p.score(data))
+    }
+
+    pub fn fit(&mut self, args: PeakFitArgs) -> ModelFitResult {
+        dispatch_peak!(self, p, p.fit_with(args, Default::default()))
+    }
+
+    pub fn fit_with(&mut self, args: PeakFitArgs, config: FitConfig) -> ModelFitResult {
+        dispatch_peak!(self, p, p.fit_with(args, config))
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct MultiPeakShapeFit {
+    fits: Vec<PeakShape>,
+}
+
+impl MultiPeakShapeFit {
+    pub fn new(fits: Vec<PeakShape>) -> Self {
+        Self { fits }
+    }
+
+    pub fn density(&self, x: f64) -> f64 {
+        self.iter().map(|p| p.density(x)).sum()
+    }
+
+    pub fn predict(&self, times: &[f64]) -> Vec<f64> {
+        times.iter().map(|t| self.density(*t)).collect()
+    }
+
+    pub fn residuals<'a, 'b>(&self, data: &PeakFitArgs<'a, 'b>) -> PeakFitArgs<'a, 'b> {
+        let mut data = data.borrow();
+        for (yhat, y) in data
+            .time
+            .iter()
+            .copied()
+            .map(|t| self.density(t))
+            .zip(data.intensity.to_mut().iter_mut())
+        {
+            *y -= yhat as f32;
+            if *y < 0.0 {
+                *y = 0.0;
+            }
+        }
+        data
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, PeakShape> {
+        self.fits.iter()
+    }
+
+    pub fn score(&self, data: &PeakFitArgs<'_, '_>) -> f64 {
+        let linear_resid = data.linear_residuals();
+        let mut shape_resid = 0.0;
+
+        for (x, y) in data.iter() {
+            shape_resid += (y - self.density(x)).powi(2);
+        }
+
+        let line_test = shape_resid / linear_resid;
+        1.0 - line_test.max(1e-5)
+    }
+
+    pub fn push(&mut self, model: PeakShape) {
+        self.fits.push(model);
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SplittingPeakShapeFitter<'a, 'b> {
+    pub data: PeakFitArgs<'a, 'b>,
+    pub peak_fits: MultiPeakShapeFit,
+}
+
+impl<'a> SplittingPeakShapeFitter<'a, 'a> {
+    pub fn new(data: PeakFitArgs<'a, 'a>) -> Self {
+        Self {
+            data,
+            peak_fits: Default::default(),
+        }
+    }
+
+    fn fit_chunk_with(
+        &self,
+        chunk: PeakFitArgs<'_, '_>,
+        config: FitConfig,
+    ) -> (PeakShape, ModelFitResult) {
+        let mut fits = Vec::new();
+
+        let mut model = PeakShape::bigaussian(&chunk);
+        let fit_result = model.fit_with(chunk.borrow(), config.clone());
+        fits.push((model, fit_result));
+
+        let (model, fit_result) = fits
+            .into_iter()
+            .min_by(|a, b| a.1.loss.total_cmp(&b.1.loss))
+            .unwrap();
+        (model, fit_result)
+    }
+
+    pub fn fit_with(&mut self, config: FitConfig) {
+        let partition_points = self.data.locate_extrema(None);
+        let chunks = self.data.split_at(partition_points.as_slice());
+
+        for chunk in chunks {
+            let (model, _fit_result) =
+                self.fit_chunk_with(self.data.slice(chunk.clone()), config.clone());
+            self.peak_fits.push(model);
+        }
+    }
+
+    pub fn score(&self) -> f64 {
+        self.peak_fits.score(&self.data)
+    }
+}
 
 #[cfg(test)]
 mod test {
+    use std::{
+        fs,
+        io::{self, prelude::*},
+    };
+
     use super::*;
+
+    fn load_features() -> io::Result<Vec<mzpeaks::feature::Feature<mzpeaks::MZ, mzpeaks::Time>>> {
+        crate::text::load_feature_table("test/data/features_graph.txt")
+    }
+
+    #[test]
+    fn test_fit_args() {
+        let features = load_features().unwrap();
+        let feature = &features[160];
+        let (_, y, z) = feature.as_view().into_inner();
+        let args = PeakFitArgs::from((y, z));
+
+        let wmt = args.weighted_mean_time();
+        assert!(
+            (wmt - 123.455).abs() < 1e-3,
+            "Observed average weighted mean time {wmt}, expected 123.455"
+        );
+
+        let mut model = GaussianPeakShape::new(wmt, 1.0, 1.0);
+        let res = model.fit(args.borrow());
+        let score = model.score(&args);
+        eprint!("{model:?}\n{res:?}\n{score}\n");
+
+        let mu = 123.44796615442881;
+        let sigma = 0.1015352963957489;
+        let amplitude = 629639.6468112208;
+
+        assert!(
+            (model.mu - mu).abs() < 1e-3,
+            "Model {0} found, expected {mu}, error = {1}",
+            model.mu,
+            model.mu - mu
+        );
+        assert!(
+            (model.sigma - sigma).abs() < 1e-3,
+            "Model {0} found, expected {sigma}, error = {1}",
+            model.sigma,
+            model.sigma - sigma
+        );
+        assert!(
+            (model.amplitude - amplitude).abs() < 1e-2,
+            "Model {0} found, expected {amplitude}, error = {1}",
+            model.amplitude,
+            model.amplitude - amplitude
+        );
+
+        let feature = &features[14216];
+        let (_, y, z) = feature.as_view().into_inner();
+        let args = PeakFitArgs::from((y, z));
+
+        let wmt = args.weighted_mean_time();
+        assert!(
+            (wmt - 122.3535).abs() < 1e-3,
+            "Observed average weighted mean time {wmt}, expected 122.353"
+        );
+
+        let mut model = SkewedGaussianPeakShape::guess(&args);
+        let res = model.fit(args.borrow());
+        let score = model.score(&args);
+        eprint!("{model:?}\n{res:?}\n{score}\n");
+
+        let feature = &features[4490];
+        let (_, y, z) = feature.as_view().into_inner();
+        let args = PeakFitArgs::from((y, z));
+
+        let mut fitter = SplittingPeakShapeFitter::new(args);
+        fitter.fit_with(FitConfig::default().max_iter(10_000));
+        eprintln!("Score: {}", fitter.score());
+        eprintln!("Fits: {:?}", fitter.peak_fits);
+
+
+        let feature = &features[10979];
+        let (_, y, z) = feature.as_view().into_inner();
+        let args = PeakFitArgs::from((y, z));
+        eprintln!(
+            "Split Points: {:?} {:?}",
+            args.locate_extrema(None),
+            args.smooth(1).locate_extrema(None),
+        );
+
+        let mut fitter = SplittingPeakShapeFitter::new(args.borrow());
+        fitter.fit_with(FitConfig::default().max_iter(10_000));
+        eprintln!("Score: {}", fitter.score());
+        eprintln!("Fits: {:?}", fitter.peak_fits);
+
+        crate::text::arrays_to_file::<&str, crate::arrayops::ArrayPairSplit>(args.borrow().into(), "data.txt").unwrap();
+        crate::text::arrays_to_file::<&str, crate::arrayops::ArrayPairSplit>(args.smooth(3).into(), "data1.txt").unwrap();
+        crate::text::arrays_to_file::<&str, crate::arrayops::ArrayPairSplit>(args.smooth(5).into(), "data2.txt").unwrap();
+    }
 
     #[test]
     fn test_fit() {
@@ -872,8 +1533,8 @@ mod test {
         let score = params.score(&measures);
 
         eprintln!(
-            "Final Params: {params:?}; Loss = {:0.3}, Score = {score:0.3}, Its = {}",
+            "Final Params: {params:?}; Loss = {:0.3}, Score = {score:0.3}, Its = {}\n",
             result.loss, result.iterations
-        )
+        );
     }
 }
