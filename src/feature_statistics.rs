@@ -1,6 +1,5 @@
-use libm::erf;
 use std::{
-    borrow::Cow,
+    borrow::{Borrow, Cow},
     f64::consts::{PI, SQRT_2},
     fmt::Debug,
     iter::FusedIterator,
@@ -8,7 +7,11 @@ use std::{
     ops::Range,
 };
 
-use crate::arrayops::trapz;
+use libm::erf;
+
+use mzpeaks::prelude::TimeArray;
+
+use crate::arrayops::{trapz, ArrayPair, ArrayPairSplit};
 
 pub struct PeakFitArgsIter<'a> {
     inner: std::iter::Zip<
@@ -352,6 +355,11 @@ impl<'c, 'd, 'a: 'c, 'b: 'd, 'e: 'c + 'd> PeakFitArgs<'a, 'b> {
                 .zip(self.intensity.iter().copied()),
         )
     }
+
+    pub fn as_array_pair(&self) -> ArrayPairSplit<'a, 'b> {
+        let this = self.borrow();
+        ArrayPairSplit::new(this.time, this.intensity)
+    }
 }
 
 impl<'a, 'b> From<(Cow<'a, [f64]>, Cow<'b, [f32]>)> for PeakFitArgs<'a, 'b> {
@@ -374,17 +382,74 @@ impl From<(Vec<f64>, Vec<f32>)> for PeakFitArgs<'static, 'static> {
     }
 }
 
-impl<'a, 'b> From<PeakFitArgs<'a, 'b>> for crate::arrayops::ArrayPairSplit<'a, 'b> {
+impl<'a, 'b> From<PeakFitArgs<'a, 'b>> for ArrayPairSplit<'a, 'b> {
     fn from(value: PeakFitArgs<'a, 'b>) -> Self {
         (value.time, value.intensity).into()
     }
 }
+
+impl<'a, X, Y> From<&'a mzpeaks::feature::Feature<X, Y>> for PeakFitArgs<'a, 'a> {
+    fn from(value: &'a mzpeaks::feature::Feature<X, Y>) -> Self {
+        Self::from((value.time_view(), value.intensity_view()))
+    }
+}
+
+impl<'a, X, Y> From<&'a mzpeaks::feature::FeatureView<'a, X, Y>> for PeakFitArgs<'a, 'a> {
+    fn from(value: &'a mzpeaks::feature::FeatureView<X, Y>) -> Self {
+        Self::from((value.time_view(), value.intensity_view()))
+    }
+}
+
+impl<'a, X, Y> From<&'a mzpeaks::feature::SimpleFeature<X, Y>> for PeakFitArgs<'a, 'a> {
+    fn from(value: &'a mzpeaks::feature::SimpleFeature<X, Y>) -> Self {
+        Self::from((value.time_view(), value.intensity_view()))
+    }
+}
+
+impl<'a, X, Y> From<&'a mzpeaks::feature::SimpleFeatureView<'a, X, Y>> for PeakFitArgs<'a, 'a> {
+    fn from(value: &'a mzpeaks::feature::SimpleFeatureView<X, Y>) -> Self {
+        Self::from((value.time_view(), value.intensity_view()))
+    }
+}
+
+impl<'a, X, Y> From<&'a mzpeaks::feature::ChargedFeature<X, Y>> for PeakFitArgs<'a, 'a> {
+    fn from(value: &'a mzpeaks::feature::ChargedFeature<X, Y>) -> Self {
+        value.as_inner().0.into()
+    }
+}
+
+impl<'a, X, Y> From<&'a mzpeaks::feature::ChargedFeatureView<'a, X, Y>> for PeakFitArgs<'a, 'a> {
+    fn from(value: &'a mzpeaks::feature::ChargedFeatureView<X, Y>) -> Self {
+        value.as_inner().0.into()
+    }
+}
+
+pub trait FitPeaksOn<'a>
+where
+    PeakFitArgs<'a, 'a>: From<&'a Self>,
+    Self: 'a,
+{
+    fn fit_peaks_with(&'a self, config: FitConfig) -> SplittingPeakShapeFitter<'a, 'a> {
+        let data: PeakFitArgs<'a, 'a> = PeakFitArgs::from(self);
+        let mut model = SplittingPeakShapeFitter::new(data);
+        model.fit_with(config);
+        model
+    }
+}
+
+impl<'a, X: 'a, Y: 'a> FitPeaksOn<'a> for mzpeaks::feature::Feature<X, Y> {}
+impl<'a, X: 'a, Y: 'a> FitPeaksOn<'a> for mzpeaks::feature::FeatureView<'a, X, Y> {}
+impl<'a, X: 'a, Y: 'a> FitPeaksOn<'a> for mzpeaks::feature::SimpleFeature<X, Y> {}
+impl<'a, X: 'a, Y: 'a> FitPeaksOn<'a> for mzpeaks::feature::SimpleFeatureView<'a, X, Y> {}
+impl<'a, X: 'a, Y: 'a> FitPeaksOn<'a> for mzpeaks::feature::ChargedFeature<X, Y> {}
+impl<'a, X: 'a, Y: 'a> FitPeaksOn<'a> for mzpeaks::feature::ChargedFeatureView<'a, X, Y> {}
 
 #[derive(Debug, Clone)]
 pub struct FitConfig {
     max_iter: usize,
     learning_rate: f64,
     convergence: f64,
+    smooth: usize,
 }
 
 impl FitConfig {
@@ -402,6 +467,11 @@ impl FitConfig {
         self.convergence = convergence;
         self
     }
+
+    pub fn smooth(mut self, smooth: usize) -> Self {
+        self.smooth = smooth;
+        self
+    }
 }
 
 impl Default for FitConfig {
@@ -410,6 +480,7 @@ impl Default for FitConfig {
             max_iter: 50_000,
             learning_rate: 1e-3,
             convergence: 1e-6,
+            smooth: 0,
         }
     }
 }
@@ -452,7 +523,11 @@ pub trait PeakShapeModelFitter<'a, 'b> {
         model_params.score(self.data())
     }
 
-    fn fit_model(&self, model_params: &mut Self::ModelType, config: FitConfig) -> ModelFitResult {
+    fn fit_model(
+        &mut self,
+        model_params: &mut Self::ModelType,
+        config: FitConfig,
+    ) -> ModelFitResult {
         let mut params = model_params.clone();
 
         let mut last_loss = f64::INFINITY;
@@ -462,10 +537,16 @@ pub trait PeakShapeModelFitter<'a, 'b> {
         let mut converged = false;
         let mut success = true;
 
+        let data = if config.smooth > 0 {
+            self.data().smooth(config.smooth)
+        } else {
+            self.data().borrow()
+        };
+
         for it in 0..config.max_iter {
             iters = it;
-            let loss = self.loss(&params);
-            let gradient = self.gradient(&params);
+            let loss = params.loss(&data);
+            let gradient = params.gradient(&data);
 
             params.gradient_update(gradient, config.learning_rate);
             if loss < best_loss {
@@ -547,7 +628,7 @@ pub trait PeakShapeModel: Clone {
     }
 
     fn fit_with(&mut self, args: PeakFitArgs, config: FitConfig) -> ModelFitResult {
-        let fitter = Self::Fitter::from_args(args);
+        let mut fitter = Self::Fitter::from_args(args);
         fitter.fit_model(self, config)
     }
 }
@@ -1170,10 +1251,12 @@ impl PeakShapeModel for BiGaussianPeakShape {
 #[derive(Debug)]
 pub struct PeakShapeFitter<'a, 'b, T: PeakShapeModel> {
     pub data: PeakFitArgs<'a, 'b>,
-    _t: PhantomData<T>,
+    pub model: Option<T>,
 }
 
-impl<'a, 'b, T: PeakShapeModel> PeakShapeModelFitter<'a, 'b> for PeakShapeFitter<'a, 'b, T> {
+impl<'a, 'b, T: PeakShapeModel> PeakShapeModelFitter<'a, 'b>
+    for PeakShapeFitter<'a, 'b, T>
+{
     type ModelType = T;
 
     fn from_args(args: PeakFitArgs<'a, 'b>) -> Self {
@@ -1191,14 +1274,81 @@ impl<'a, 'b, T: PeakShapeModel> PeakShapeModelFitter<'a, 'b> for PeakShapeFitter
     fn data(&self) -> &PeakFitArgs {
         &self.data
     }
+
+    fn fit_model(
+        &mut self,
+        model_params: &mut Self::ModelType,
+        config: FitConfig,
+    ) -> ModelFitResult {
+        let mut params = model_params.clone();
+
+        let mut last_loss = f64::INFINITY;
+        let mut best_loss = f64::INFINITY;
+        let mut best_params = model_params.clone();
+        let mut iters = 0;
+        let mut converged = false;
+        let mut success = true;
+
+        let data = if config.smooth > 0 {
+            self.data().smooth(config.smooth)
+        } else {
+            self.data().borrow()
+        };
+
+        for it in 0..config.max_iter {
+            iters = it;
+            let loss = params.loss(&data);
+            let gradient = params.gradient(&data);
+
+            params.gradient_update(gradient, config.learning_rate);
+            if loss < best_loss {
+                best_loss = loss;
+                best_params = params.clone();
+            }
+
+            if (last_loss - loss).abs() < config.convergence {
+                converged = true;
+                break;
+            }
+            last_loss = loss;
+
+            if loss.is_nan() || loss.is_infinite() {
+                success = false;
+                break;
+            }
+        }
+
+        self.model = Some(best_params.clone());
+        *model_params = best_params;
+        ModelFitResult::new(best_loss, iters, converged, success)
+    }
 }
 
 impl<'a, 'b, T: PeakShapeModel> PeakShapeFitter<'a, 'b, T> {
     pub fn new(data: PeakFitArgs<'a, 'b>) -> Self {
-        Self {
-            data,
-            _t: PhantomData,
-        }
+        Self { data, model: None }
+    }
+
+    pub fn residuals(&self) -> PeakFitArgs<'_, '_> {
+        self.model.as_ref().unwrap().residuals(&self.data)
+    }
+
+    pub fn predicted(&self) -> PeakFitArgs<'_, '_> {
+        let predicted = self
+            .model
+            .as_ref()
+            .unwrap()
+            .predict(&self.data.time)
+            .into_iter()
+            .map(|x| x as f32)
+            .collect();
+        let mut dup = self.data.borrow();
+        dup.intensity = Cow::Owned(predicted);
+        dup
+    }
+
+    pub fn score(&self) -> f64 {
+        self.model.as_ref().unwrap().score(&self.data)
     }
 }
 
@@ -1285,9 +1435,9 @@ impl MultiPeakShapeFit {
             .zip(data.intensity.to_mut().iter_mut())
         {
             *y -= yhat as f32;
-            if *y < 0.0 {
-                *y = 0.0;
-            }
+            // if *y < 0.0 {
+            //     *y = 0.0;
+            // }
         }
         data
     }
@@ -1354,6 +1504,22 @@ impl<'a> SplittingPeakShapeFitter<'a, 'a> {
                 self.fit_chunk_with(self.data.slice(chunk.clone()), config.clone());
             self.peak_fits.push(model);
         }
+    }
+
+    pub fn residuals(&self) -> PeakFitArgs<'_, '_> {
+        self.peak_fits.residuals(&self.data)
+    }
+
+    pub fn predicted(&self) -> PeakFitArgs<'_, '_> {
+        let predicted = self
+            .peak_fits
+            .predict(&self.data.time)
+            .into_iter()
+            .map(|x| x as f32)
+            .collect();
+        let mut dup = self.data.borrow();
+        dup.intensity = Cow::Owned(predicted);
+        dup
     }
 
     pub fn score(&self) -> f64 {
@@ -1439,10 +1605,8 @@ mod test {
         eprintln!("Score: {}", fitter.score());
         eprintln!("Fits: {:?}", fitter.peak_fits);
 
-
         let feature = &features[10979];
-        let (_, y, z) = feature.as_view().into_inner();
-        let args = PeakFitArgs::from((y, z));
+        let args: PeakFitArgs<'_, '_> = feature.into();
         eprintln!(
             "Split Points: {:?} {:?}",
             args.locate_extrema(None),
@@ -1450,13 +1614,17 @@ mod test {
         );
 
         let mut fitter = SplittingPeakShapeFitter::new(args.borrow());
-        fitter.fit_with(FitConfig::default().max_iter(10_000));
+        fitter.fit_with(FitConfig::default().max_iter(10_000).smooth(3));
         eprintln!("Score: {}", fitter.score());
         eprintln!("Fits: {:?}", fitter.peak_fits);
 
-        crate::text::arrays_to_file::<&str, crate::arrayops::ArrayPairSplit>(args.borrow().into(), "data.txt").unwrap();
-        crate::text::arrays_to_file::<&str, crate::arrayops::ArrayPairSplit>(args.smooth(3).into(), "data1.txt").unwrap();
-        crate::text::arrays_to_file::<&str, crate::arrayops::ArrayPairSplit>(args.smooth(5).into(), "data2.txt").unwrap();
+        // let residuals = fitter.residuals();
+        // let predicted = fitter.predicted();
+        // crate::text::arrays_to_file(args.as_array_pair(), "data.txt").unwrap();
+        // crate::text::arrays_to_file(args.smooth(3).as_array_pair(), "data1.txt").unwrap();
+        // crate::text::arrays_to_file(args.smooth(5).as_array_pair(), "data2.txt").unwrap();
+        // crate::text::arrays_to_file(residuals.as_array_pair(), "residuals.txt").unwrap();
+        // crate::text::arrays_to_file(predicted.as_array_pair(), "predicted.txt").unwrap();
     }
 
     #[test]

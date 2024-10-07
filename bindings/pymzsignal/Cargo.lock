@@ -135,13 +135,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "mzpeaks"
+version = "0.21.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "62c524c0e6edc600b5b84f420f94020fe68f3d3ea73141cadb9c28cfa1360aca"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
 name = "mzsignal"
 version = "0.24.0"
 dependencies = [
  "cfg-if",
  "libm",
  "log",
- "mzpeaks",
+ "mzpeaks 0.21.0",
  "nalgebra",
  "num-traits",
  "rayon",
@@ -308,7 +317,7 @@ dependencies = [
 name = "pymzsignal"
 version = "0.3.0"
 dependencies = [
- "mzpeaks",
+ "mzpeaks 0.20.0",
  "mzsignal",
  "numpy",
  "pyo3",
