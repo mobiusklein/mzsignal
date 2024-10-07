@@ -49,24 +49,25 @@ impl<'a> PeakFitArgsIter<'a> {
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, PartialOrd)]
 pub struct SplittingPoint {
-    pub first_maximum: f32,
-    pub minimum: f32,
-    pub second_maximum: f32,
-    pub minimum_index: f64,
+    pub first_maximum_height: f32,
+    pub minimum_height: f32,
+    pub second_maximum_height: f32,
+    pub minimum_time: f64,
 }
 
 impl SplittingPoint {
     pub fn new(first_maximum: f32, minimum: f32, second_maximum: f32, minimum_index: f64) -> Self {
         Self {
-            first_maximum,
-            minimum,
-            second_maximum,
-            minimum_index,
+            first_maximum_height: first_maximum,
+            minimum_height: minimum,
+            second_maximum_height: second_maximum,
+            minimum_time: minimum_index,
         }
     }
 
     pub fn total_distance(&self) -> f32 {
-        (self.first_maximum - self.minimum) + (self.second_maximum - self.minimum)
+        (self.first_maximum_height - self.minimum_height)
+            + (self.second_maximum_height - self.minimum_height)
     }
 }
 
@@ -212,17 +213,17 @@ impl<'c, 'd, 'a: 'c, 'b: 'd, 'e: 'c + 'd> PeakFitArgs<'a, 'b> {
             let start_i = self
                 .time
                 .iter()
-                .position(|t| *t > last_x && *t <= point.minimum_index)
+                .position(|t| *t > last_x && *t <= point.minimum_time)
                 .unwrap_or_default();
             let end_i = self
                 .time
                 .iter()
-                .rposition(|t| *t > last_x && *t <= point.minimum_index)
+                .rposition(|t| *t > last_x && *t <= point.minimum_time)
                 .unwrap_or_default();
             if start_i != end_i {
                 segments.push(start_i..(end_i + 1).min(n));
             }
-            last_x = point.minimum_index;
+            last_x = point.minimum_time;
         }
 
         let i = self.time.iter().position(|t| *t > last_x).unwrap_or(n);
@@ -1254,9 +1255,7 @@ pub struct PeakShapeFitter<'a, 'b, T: PeakShapeModel> {
     pub model: Option<T>,
 }
 
-impl<'a, 'b, T: PeakShapeModel> PeakShapeModelFitter<'a, 'b>
-    for PeakShapeFitter<'a, 'b, T>
-{
+impl<'a, 'b, T: PeakShapeModel> PeakShapeModelFitter<'a, 'b> for PeakShapeFitter<'a, 'b, T> {
     type ModelType = T;
 
     fn from_args(args: PeakFitArgs<'a, 'b>) -> Self {
@@ -1534,15 +1533,146 @@ mod test {
         io::{self, prelude::*},
     };
 
+    use mzpeaks::{feature::Feature, Time, MZ};
+
     use super::*;
 
-    fn load_features() -> io::Result<Vec<mzpeaks::feature::Feature<mzpeaks::MZ, mzpeaks::Time>>> {
-        crate::text::load_feature_table("test/data/features_graph.txt")
+    #[rstest::fixture]
+    #[once]
+    fn feature_table() -> Vec<Feature<MZ, Time>> {
+        crate::text::load_feature_table("test/data/features_graph.txt").unwrap()
     }
 
-    #[test]
-    fn test_fit_args() {
-        let features = load_features().unwrap();
+    macro_rules! assert_is_close {
+        ($t1:expr, $t2:expr, $tol:expr, $label:literal) => {
+            assert!(
+                ($t1 - $t2).abs() < $tol,
+                "Observed {} {}, expected {}, difference {}",
+                $label,
+                $t1,
+                $t2,
+                $t1 - $t2,
+            );
+        };
+    }
+
+    #[rstest::rstest]
+    fn test_fit_feature_14216(feature_table: &[Feature<MZ, Time>]) {
+        let feature = &feature_table[14216];
+        let args: PeakFitArgs = feature.into();
+
+        let wmt = args.weighted_mean_time();
+        assert_is_close!(wmt, 122.3535, 1e-3, "weighted mean time");
+
+        let mut model = SkewedGaussianPeakShape::guess(&args);
+        let res = model.fit(args.borrow());
+        let score = model.score(&args);
+        eprintln!("{model:?}\n{res:?}\n{score}\n");
+
+        let expected = SkewedGaussianPeakShape {
+            mu: 121.54820923262623,
+            sigma: 0.14392304906433506,
+            amplitude: 4768163.602247336,
+            lambda: 0.055903399861434805,
+        };
+
+        assert_is_close!(expected.mu, model.mu, 1e-3, "mu");
+        assert_is_close!(expected.sigma, model.sigma, 1e-3, "sigma");
+        assert_is_close!(expected.lambda, model.lambda, 1e-3, "lambda");
+        assert_is_close!(expected.amplitude, model.amplitude, 100.0, "amplitude");
+    }
+
+    #[rstest::rstest]
+    fn test_fit_feature_4490(feature_table: &[Feature<MZ, Time>]) {
+        let feature = &feature_table[4490];
+        let args = PeakFitArgs::from(feature);
+
+        let expected_fits = MultiPeakShapeFit {
+            fits: vec![
+                PeakShape::BiGaussian(BiGaussianPeakShape {
+                    mu: 125.41112342515179,
+                    sigma_low: 0.2130619068583823,
+                    sigma_high: 0.22703724439718917,
+                    amplitude: 2535197.152987912,
+                }),
+                PeakShape::BiGaussian(BiGaussianPeakShape {
+                    mu: 126.05807704271226,
+                    sigma_low: 0.9997523697939726,
+                    sigma_high: 1.1813146384558728,
+                    amplitude: 267102.87981724285,
+                }),
+            ],
+        };
+
+        let mut fitter = SplittingPeakShapeFitter::new(args);
+        fitter.fit_with(FitConfig::default().max_iter(10_000));
+        eprintln!("Score: {}", fitter.score());
+        eprintln!("Fits: {:?}", fitter.peak_fits);
+
+        for (exp, obs) in expected_fits.iter().zip(fitter.peak_fits.iter()) {
+            let expected_mu = dispatch_peak!(exp, model, model.mu);
+            let observed_mu = dispatch_peak!(obs, model, model.mu);
+
+            assert_is_close!(expected_mu, observed_mu, 1e-3, "mu");
+        }
+    }
+
+    #[rstest::rstest]
+    fn test_fit_feature_10979(feature_table: &[Feature<MZ, Time>]) {
+        let feature = &feature_table[10979];
+        let args: PeakFitArgs<'_, '_> = feature.into();
+
+        let expected_split_point = SplittingPoint {
+            first_maximum_height: 1562937.5,
+            minimum_height: 130524.61,
+            second_maximum_height: 524531.8,
+            minimum_time: 127.1233653584,
+        };
+
+        let observed_split_point = args.locate_extrema(None).unwrap();
+
+        eprintln!("Split Points: {:?}", observed_split_point,);
+
+        assert_is_close!(
+            expected_split_point.minimum_time,
+            observed_split_point.minimum_time,
+            1e-2,
+            "minimum_time"
+        );
+
+        let mut fitter = SplittingPeakShapeFitter::new(args.borrow());
+        fitter.fit_with(FitConfig::default().max_iter(10_000).smooth(3));
+        eprintln!("Score: {}", fitter.score());
+        eprintln!("Fits: {:?}", fitter.peak_fits);
+
+        let expected_fits = MultiPeakShapeFit {
+            fits: vec![
+                PeakShape::BiGaussian(BiGaussianPeakShape {
+                    mu: 125.28364636849112,
+                    sigma_low: 0.3419458944098784,
+                    sigma_high: 0.945137432308437,
+                    amplitude: 1277701.0773096785,
+                }),
+                PeakShape::BiGaussian(BiGaussianPeakShape {
+                    mu: 127.32401611160664,
+                    sigma_low: 0.09483862559250714,
+                    sigma_high: 0.32453016302695475,
+                    amplitude: 487770.8422514298,
+                }),
+            ],
+        };
+
+        for (exp, obs) in expected_fits.iter().zip(fitter.peak_fits.iter()) {
+            let expected_mu = dispatch_peak!(exp, model, model.mu);
+            let observed_mu = dispatch_peak!(obs, model, model.mu);
+
+            assert_is_close!(expected_mu, observed_mu, 1e-3, "mu");
+        }
+    }
+
+    #[rstest::rstest]
+    fn test_fit_args(feature_table: &[Feature<MZ, Time>]) {
+        let features = feature_table;
         let feature = &features[160];
         let (_, y, z) = feature.as_view().into_inner();
         let args = PeakFitArgs::from((y, z));
@@ -1581,129 +1711,5 @@ mod test {
         //     model.amplitude,
         //     model.amplitude - amplitude
         // );
-
-        let feature = &features[14216];
-        let (_, y, z) = feature.as_view().into_inner();
-        let args = PeakFitArgs::from((y, z));
-
-        let wmt = args.weighted_mean_time();
-        assert!(
-            (wmt - 122.3535).abs() < 1e-3,
-            "Observed average weighted mean time {wmt}, expected 122.353"
-        );
-
-        let mut model = SkewedGaussianPeakShape::guess(&args);
-        let res = model.fit(args.borrow());
-        let score = model.score(&args);
-        eprint!("{model:?}\n{res:?}\n{score}\n");
-
-        let feature = &features[4490];
-        let (_, y, z) = feature.as_view().into_inner();
-        let args = PeakFitArgs::from((y, z));
-
-        let mut fitter = SplittingPeakShapeFitter::new(args);
-        fitter.fit_with(FitConfig::default().max_iter(10_000));
-        eprintln!("Score: {}", fitter.score());
-        eprintln!("Fits: {:?}", fitter.peak_fits);
-
-        let feature = &features[10979];
-        let args: PeakFitArgs<'_, '_> = feature.into();
-        eprintln!(
-            "Split Points: {:?} {:?}",
-            args.locate_extrema(None),
-            args.smooth(1).locate_extrema(None),
-        );
-
-        let mut fitter = SplittingPeakShapeFitter::new(args.borrow());
-        fitter.fit_with(FitConfig::default().max_iter(10_000).smooth(3));
-        eprintln!("Score: {}", fitter.score());
-        eprintln!("Fits: {:?}", fitter.peak_fits);
-
-        // let residuals = fitter.residuals();
-        // let predicted = fitter.predicted();
-        // crate::text::arrays_to_file(args.as_array_pair(), "data.txt").unwrap();
-        // crate::text::arrays_to_file(args.smooth(3).as_array_pair(), "data1.txt").unwrap();
-        // crate::text::arrays_to_file(args.smooth(5).as_array_pair(), "data2.txt").unwrap();
-        // crate::text::arrays_to_file(residuals.as_array_pair(), "residuals.txt").unwrap();
-        // crate::text::arrays_to_file(predicted.as_array_pair(), "predicted.txt").unwrap();
-    }
-
-    #[test]
-    fn test_fit() {
-        let time = vec![
-            0., 0.20408163, 0.40816327, 0.6122449, 0.81632653, 1.02040816, 1.2244898, 1.42857143,
-            1.63265306, 1.83673469, 2.04081633, 2.24489796, 2.44897959, 2.65306122, 2.85714286,
-            3.06122449, 3.26530612, 3.46938776, 3.67346939, 3.87755102, 4.08163265, 4.28571429,
-            4.48979592, 4.69387755, 4.89795918, 5.10204082, 5.30612245, 5.51020408, 5.71428571,
-            5.91836735, 6.12244898, 6.32653061, 6.53061224, 6.73469388, 6.93877551, 7.14285714,
-            7.34693878, 7.55102041, 7.75510204, 7.95918367, 8.16326531, 8.36734694, 8.57142857,
-            8.7755102, 8.97959184, 9.18367347, 9.3877551, 9.59183673, 9.79591837, 10.,
-        ];
-
-        let mu = 5.0;
-        let sigma = 1.5;
-        let amplitude = 5000.0;
-
-        let ref_model = GaussianPeakShape {
-            mu,
-            sigma,
-            amplitude,
-        };
-
-        let intensity: Vec<_> = time.iter().map(|t| ref_model.density(*t) as f32).collect();
-
-        let measures = PeakFitArgs::from((time, intensity.clone()));
-
-        let initial = GaussianPeakShape::from_slice(&[4.0, 1.0, 1.0]);
-
-        let mut params = initial.clone();
-        let result = params.fit_with(measures.borrow(), FitConfig::default().max_iter(50_000));
-        let score = params.score(&measures);
-
-        eprintln!(
-            "Final Params: {params:?}; Loss = {:0.3}, Score = {score:0.3}, Its = {}",
-            result.loss, result.iterations
-        )
-    }
-
-    #[test]
-    fn test_skewed_fit() {
-        let times = vec![
-            0., 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1., 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7,
-            1.8, 1.9, 2., 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 3., 3.1, 3.2, 3.3, 3.4, 3.5,
-            3.6, 3.7, 3.8, 3.9, 4., 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7, 4.8, 4.9, 5., 5.1, 5.2, 5.3,
-            5.4, 5.5, 5.6, 5.7, 5.8, 5.9, 6., 6.1, 6.2, 6.3, 6.4, 6.5, 6.6, 6.7, 6.8, 6.9, 7., 7.1,
-            7.2, 7.3, 7.4, 7.5, 7.6, 7.7, 7.8, 7.9, 8., 8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 8.7, 8.8,
-            8.9, 9., 9.1, 9.2, 9.3, 9.4, 9.5, 9.6, 9.7, 9.8, 9.9, 10., 10.1, 10.2, 10.3, 10.4,
-            10.5, 10.6, 10.7, 10.8, 10.9, 11., 11.1, 11.2, 11.3, 11.4, 11.5, 11.6, 11.7, 11.8,
-            11.9, 12., 12.1, 12.2, 12.3, 12.4, 12.5, 12.6, 12.7, 12.8, 12.9, 13., 13.1, 13.2, 13.3,
-            13.4, 13.5, 13.6, 13.7, 13.8, 13.9, 14., 14.1, 14.2, 14.3, 14.4, 14.5, 14.6, 14.7,
-            14.8, 14.9,
-        ];
-
-        let reference = SkewedGaussianPeakShape {
-            mu: 4.0,
-            sigma: 1.5,
-            amplitude: 1500.0,
-            lambda: 2.5,
-        };
-
-        let intensities: Vec<_> = times
-            .iter()
-            .copied()
-            .map(|x| reference.density(x) as f32)
-            .collect();
-
-        let measures = PeakFitArgs::from((times.clone(), intensities.clone()));
-
-        let initial = SkewedGaussianPeakShape::from_slice(&[4.0, 1.0, 1.0, 1.0]);
-        let mut params = initial.clone();
-        let result = params.fit_with(measures.borrow(), FitConfig::default().max_iter(50_000));
-        let score = params.score(&measures);
-
-        eprintln!(
-            "Final Params: {params:?}; Loss = {:0.3}, Score = {score:0.3}, Its = {}\n",
-            result.loss, result.iterations
-        );
     }
 }
