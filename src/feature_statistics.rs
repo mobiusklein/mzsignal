@@ -1565,8 +1565,18 @@ mod test {
         assert_is_close!(wmt, 122.3535, 1e-3, "weighted mean time");
 
         let mut model = SkewedGaussianPeakShape::guess(&args);
+
+        let expected_gradient = SkewedGaussianPeakShape {
+            mu: 1.0877288990485208,
+            sigma: 2.066092153296829,
+            amplitude: 3421141.321363151,
+            lambda: 0.846178224318954,
+        };
+        let gradient = model.gradient(&args);
+
         eprintln!("Initial:\n{model:?}");
-        eprintln!("Gradient:\n{:?}", model.gradient(&args));
+        eprintln!("Gradient:\n{:?}", gradient);
+
         let res = model.fit(args.borrow());
         let score = model.score(&args);
         eprintln!("{model:?}\n{res:?}\n{score}\n");
@@ -1580,6 +1590,9 @@ mod test {
 
         assert_is_close!(expected.mu, model.mu, 1e-2, "mu");
         assert_is_close!(expected.sigma, model.sigma, 1e-3, "sigma");
+
+        assert_is_close!(expected_gradient.mu, gradient.mu, 1e-2, "mu");
+        assert_is_close!(expected_gradient.sigma, gradient.sigma, 1e-2, "sigma");
         // unstable
         // assert_is_close!(expected.lambda, model.lambda, 1e-3, "lambda");
         // assert_is_close!(expected.amplitude, model.amplitude, 100.0, "amplitude");
