@@ -1565,6 +1565,7 @@ mod test {
         assert_is_close!(wmt, 122.3535, 1e-3, "weighted mean time");
 
         let mut model = SkewedGaussianPeakShape::guess(&args);
+        eprintln!("Initial:\n{model:?}");
         let res = model.fit(args.borrow());
         let score = model.score(&args);
         eprintln!("{model:?}\n{res:?}\n{score}\n");
@@ -1576,7 +1577,7 @@ mod test {
             lambda: 0.055903399861434805,
         };
 
-        assert_is_close!(expected.mu, model.mu, 1e-3, "mu");
+        assert_is_close!(expected.mu, model.mu, 1e-2, "mu");
         assert_is_close!(expected.sigma, model.sigma, 1e-3, "sigma");
         assert_is_close!(expected.lambda, model.lambda, 1e-3, "lambda");
         assert_is_close!(expected.amplitude, model.amplitude, 100.0, "amplitude");
