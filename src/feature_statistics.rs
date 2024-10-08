@@ -506,7 +506,7 @@ impl ModelFitResult {
 }
 
 pub trait PeakShapeModelFitter<'a, 'b> {
-    type ModelType: PeakShapeModel;
+    type ModelType: PeakShapeModel + Debug;
 
     fn from_args(args: PeakFitArgs<'a, 'b>) -> Self;
 
@@ -549,24 +549,27 @@ pub trait PeakShapeModelFitter<'a, 'b> {
             let loss = params.loss(&data);
             let gradient = params.gradient(&data);
 
+            log::trace!("{it}: Loss = {loss:0.3}: Gradient = {gradient:?}");
             params.gradient_update(gradient, config.learning_rate);
             if loss < best_loss {
+                log::trace!("{it}: Updating best parameters {params:?}");
                 best_loss = loss;
                 best_params = params.clone();
             }
 
             if (last_loss - loss).abs() < config.convergence {
+                log::trace!("{it}: Convergence = {}", last_loss - loss);
                 converged = true;
                 break;
             }
             last_loss = loss;
 
             if loss.is_nan() || loss.is_infinite() {
+                log::trace!("{it}: Aborting, loss invalid!");
                 success = false;
                 break;
             }
         }
-
         *model_params = best_params;
         ModelFitResult::new(best_loss, iters, converged, success)
     }
@@ -1250,12 +1253,12 @@ impl PeakShapeModel for BiGaussianPeakShape {
 }
 
 #[derive(Debug)]
-pub struct PeakShapeFitter<'a, 'b, T: PeakShapeModel> {
+pub struct PeakShapeFitter<'a, 'b, T: PeakShapeModel + Debug> {
     pub data: PeakFitArgs<'a, 'b>,
     pub model: Option<T>,
 }
 
-impl<'a, 'b, T: PeakShapeModel> PeakShapeModelFitter<'a, 'b> for PeakShapeFitter<'a, 'b, T> {
+impl<'a, 'b, T: PeakShapeModel + Debug> PeakShapeModelFitter<'a, 'b> for PeakShapeFitter<'a, 'b, T> {
     type ModelType = T;
 
     fn from_args(args: PeakFitArgs<'a, 'b>) -> Self {
@@ -1299,19 +1302,23 @@ impl<'a, 'b, T: PeakShapeModel> PeakShapeModelFitter<'a, 'b> for PeakShapeFitter
             let loss = params.loss(&data);
             let gradient = params.gradient(&data);
 
+            log::trace!("{it}: Loss = {loss:0.3}: Gradient = {gradient:?}");
             params.gradient_update(gradient, config.learning_rate);
             if loss < best_loss {
+                log::trace!("{it}: Updating best parameters {params:?}");
                 best_loss = loss;
                 best_params = params.clone();
             }
 
             if (last_loss - loss).abs() < config.convergence {
+                log::trace!("{it}: Convergence = {}", last_loss - loss);
                 converged = true;
                 break;
             }
             last_loss = loss;
 
             if loss.is_nan() || loss.is_infinite() {
+                log::trace!("{it}: Aborting, loss invalid!");
                 success = false;
                 break;
             }
@@ -1323,7 +1330,7 @@ impl<'a, 'b, T: PeakShapeModel> PeakShapeModelFitter<'a, 'b> for PeakShapeFitter
     }
 }
 
-impl<'a, 'b, T: PeakShapeModel> PeakShapeFitter<'a, 'b, T> {
+impl<'a, 'b, T: PeakShapeModel + Debug> PeakShapeFitter<'a, 'b, T> {
     pub fn new(data: PeakFitArgs<'a, 'b>) -> Self {
         Self { data, model: None }
     }
@@ -1540,6 +1547,7 @@ mod test {
     #[rstest::fixture]
     #[once]
     fn feature_table() -> Vec<Feature<MZ, Time>> {
+        log::info!("Logging initialized");
         crate::text::load_feature_table("test/data/features_graph.txt").unwrap()
     }
 
@@ -1557,6 +1565,7 @@ mod test {
     }
 
     #[rstest::rstest]
+    #[test_log::test]
     fn test_fit_feature_14216(feature_table: &[Feature<MZ, Time>]) {
         let feature = &feature_table[14216];
         let args: PeakFitArgs = feature.into();

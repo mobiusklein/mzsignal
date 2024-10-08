@@ -1,6 +1,10 @@
 on: [push, pull_request]
 
 name: Test
+
+env:
+  RUST_LOG: trace
+
 jobs:
 
   test:
