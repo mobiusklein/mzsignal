@@ -15,3 +15,7 @@ release tag: (changelog tag)
 asm:
     cargo asm --no-default-features --features nalgebra,avx --lib mzsignal::average::SignalAverager::interpolate 0 \
         --simplify --rust --color | bat
+
+docmath:
+    cargo clean --doc
+    RUSTDOCFLAGS="--html-in-header doc/katex.html" cargo doc --lib --no-deps -v
