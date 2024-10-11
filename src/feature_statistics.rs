@@ -454,14 +454,12 @@ impl<'a, X, Y> From<&'a mzpeaks::feature::ChargedFeatureView<'a, X, Y>> for Peak
     }
 }
 
-
 /// Fit peak shapes on implementing types
 pub trait FitPeaksOn<'a>
 where
     PeakFitArgs<'a, 'a>: From<&'a Self>,
     Self: 'a,
 {
-
     fn as_peak_shape_args(&'a self) -> PeakFitArgs<'a, 'a> {
         let data: PeakFitArgs<'a, 'a> = PeakFitArgs::from(self);
         data
@@ -743,12 +741,68 @@ impl GaussianPeakShape {
         vec![self.mu, self.sigma, self.amplitude]
     }
 
+    pub fn gradient(&self, data: &PeakFitArgs) -> Self {
+        let amp = self.amplitude;
+        let mu = self.mu;
+        let sigma = self.sigma;
+
+        let two_mu = 2.0 * mu;
+        let sigma_squared = sigma.powi(2);
+        let sigma_cubed = sigma.powi(3);
+        let sigma_squared_inv = 1.0 / sigma_squared;
+
+        let mut gradient_mu = 0.0;
+        let mut gradient_sigma = 0.0;
+        let mut gradient_amplitude = 0.0;
+
+        for (x, y) in data.iter() {
+            let mu_sub_x_squared = (-mu + x).powi(2);
+            let half_mu_sub_x_squared_div_sigma_squared =
+                -0.5 * mu_sub_x_squared * sigma_squared_inv;
+            let half_mu_sub_x_squared_div_sigma_squared_exp =
+                half_mu_sub_x_squared_div_sigma_squared.exp();
+
+            let delta_y = -amp * half_mu_sub_x_squared_div_sigma_squared_exp + y;
+
+            let delta_y_half_mu_sub_x_squared_div_sigma_squared_exp =
+                delta_y * half_mu_sub_x_squared_div_sigma_squared_exp;
+
+            gradient_mu += amp
+                * (two_mu - 2.0 * x)
+                * delta_y_half_mu_sub_x_squared_div_sigma_squared_exp
+                * sigma_squared_inv
+                + 1.0;
+
+            gradient_sigma +=
+                -2.0 * amp * mu_sub_x_squared * delta_y_half_mu_sub_x_squared_div_sigma_squared_exp
+                    / sigma_cubed
+                    + 1.0;
+
+            gradient_amplitude += -2.0 * delta_y_half_mu_sub_x_squared_div_sigma_squared_exp;
+        }
+
+        let n = data.len() as f64;
+
+        Self::new(gradient_mu / n, gradient_sigma / n, gradient_amplitude / n).gradient_norm()
+    }
+
+    fn gradient_norm(&self) -> Self {
+        let mut g = [self.mu, self.sigma, self.amplitude];
+        let gradnorm: f64 = g.iter().map(|f| f.abs()).sum::<f64>() / g.len() as f64;
+        if gradnorm > 1.0 {
+            g[0] /= gradnorm;
+            g[1] /= gradnorm;
+        }
+
+        Self::new(g[0], g[1], g[2])
+    }
+
     /// Compute the gradient w.r.t. $`\mu`$
     ///
     /// ```math
     /// -\frac{a \left(2 \mu - 2 x\right) \left(- a e^{- \frac{\left(- \mu + x\right)^{2}}{2 \sigma^{2}}} + y\right) e^{- \frac{\left(- \mu + x\right)^{2}}{2 \sigma^{2}}}}{\sigma^{2}} + 1
     /// ```
-    pub fn mu_gradient(&self, data: &PeakFitArgs) -> f64 {
+    fn mu_gradient(&self, data: &PeakFitArgs) -> f64 {
         let amp = self.amplitude;
         let mu = self.mu;
         let sigma = self.sigma;
@@ -782,7 +836,7 @@ impl GaussianPeakShape {
     /// ```math
     /// - \frac{2 a \left(- \mu + x\right)^{2} \left(- a e^{- \frac{\left(- \mu + x\right)^{2}}{2 \sigma^{2}}} + y\right) e^{- \frac{\left(- \mu + x\right)^{2}}{2 \sigma^{2}}}}{\sigma^{3}} + 1
     /// ```
-    pub fn sigma_gradient(&self, data: &PeakFitArgs) -> f64 {
+    fn sigma_gradient(&self, data: &PeakFitArgs) -> f64 {
         let amp = self.amplitude;
         let mu = self.mu;
         let sigma = self.sigma;
@@ -815,7 +869,7 @@ impl GaussianPeakShape {
     /// ```math
     /// - 2 \left(- a e^{- \frac{\left(- \mu + x\right)^{2}}{2 \sigma^{2}}} + y\right) e^{- \frac{\left(- \mu + x\right)^{2}}{2 \sigma^{2}}}
     /// ```
-    pub fn amplitude_gradient(&self, data: &PeakFitArgs) -> f64 {
+    fn amplitude_gradient(&self, data: &PeakFitArgs) -> f64 {
         let amp = self.amplitude;
         let mu = self.mu;
         let sigma = self.sigma;
@@ -839,19 +893,13 @@ impl GaussianPeakShape {
         grad / data.len() as f64
     }
 
-    pub fn gradient(&self, data: &PeakFitArgs) -> Self {
-        let mut g = [
+    pub fn gradient_split(&self, data: &PeakFitArgs) -> Self {
+        Self::new(
             self.mu_gradient(&data),
             self.sigma_gradient(&data),
             self.amplitude_gradient(&data),
-        ];
-        let gradnorm: f64 = g.iter().map(|f| f.abs()).sum::<f64>() / g.len() as f64;
-        if gradnorm > 1.0 {
-            g[0] /= gradnorm;
-            g[1] /= gradnorm;
-        }
-
-        Self::new(g[0], g[1], g[2])
+        )
+        .gradient_norm()
     }
 
     pub fn gradient_update(&mut self, gradient: Self, learning_rate: f64) {
@@ -947,13 +995,18 @@ impl SkewedGaussianPeakShape {
         vec![self.mu, self.sigma, self.amplitude, self.lambda]
     }
 
-    pub fn gradient(&self, data: &PeakFitArgs) -> SkewedGaussianPeakShape {
-        let mut g = [
+    pub fn gradient_split(&self, data: &PeakFitArgs) -> Self {
+        Self::new(
             self.mu_gradient(&data),
             self.sigma_gradient(&data),
             self.amplitude_gradient(&data),
             self.lambda_gradient(&data),
-        ];
+        )
+        .gradient_norm()
+    }
+
+    fn gradient_norm(&self) -> Self {
+        let mut g = [self.mu, self.sigma, self.amplitude, self.lambda];
         let gradnorm: f64 = g.iter().map(|f| f.abs()).sum::<f64>() / g.len() as f64;
         if gradnorm > 1.0 {
             g[0] /= gradnorm;
@@ -964,7 +1017,94 @@ impl SkewedGaussianPeakShape {
         SkewedGaussianPeakShape::new(g[0], g[1], g[2], g[3])
     }
 
-    pub fn mu_gradient(&self, data: &PeakFitArgs) -> f64 {
+    pub fn gradient(&self, data: &PeakFitArgs) -> Self {
+        let amp = self.amplitude;
+        let mu = self.mu;
+        let sigma = self.sigma;
+        let lam = self.lambda;
+
+        let two_sigma = sigma * 2.0;
+        let sigma_square = sigma.powi(2);
+        let sigma_cubed = sigma.powi(3);
+        let skew = 2.0 * 1.4142135623731 * amp * lam;
+        let delta_skew = -2.0 * 1.4142135623731 * amp;
+        let sqrt_2_lam = SQRT_2 * lam;
+        let sqrt_pi_sigma = PI.sqrt() * sigma;
+        let sqrt_pi_sigma_square = PI.sqrt() * sigma_square;
+        let neg_half_lam_squared = -1_f64 / 2.0 * lam.powi(2);
+
+        let mut gradient_mu = 0.0;
+        let mut gradient_sigma = 0.0;
+        let mut gradient_lambda = 0.0;
+        let mut gradient_amplitude = 0.0;
+
+        for (x, y) in data.iter() {
+            let mu_sub_x = -mu + x;
+            let mu_sub_x_squared = mu_sub_x.powi(2);
+            let neg_half_mu_sub_x_squared_div_sigma_squared_exp =
+                (-0.5 * mu_sub_x_squared / sigma_square).exp();
+            let erf_sqrt_2_lam_mu_sub_x_div_two_sigma_plus_one =
+                erf(sqrt_2_lam * mu_sub_x / two_sigma) + 1.0;
+            let neg_half_lam_squared_mu_sub_x_squared_div_sigma_square_exp =
+                (neg_half_lam_squared * mu_sub_x_squared / sigma_square).exp();
+
+            let delta_y = -amp
+                * erf_sqrt_2_lam_mu_sub_x_div_two_sigma_plus_one
+                * neg_half_mu_sub_x_squared_div_sigma_squared_exp
+                + y;
+
+            gradient_mu += delta_y
+                * (skew
+                    * neg_half_mu_sub_x_squared_div_sigma_squared_exp
+                    * neg_half_lam_squared_mu_sub_x_squared_div_sigma_square_exp
+                    / sqrt_pi_sigma
+                    + amp
+                        * (2.0 * mu - 2.0 * x)
+                        * erf_sqrt_2_lam_mu_sub_x_div_two_sigma_plus_one
+                        * neg_half_mu_sub_x_squared_div_sigma_squared_exp
+                        / sigma_square)
+                + 1.0;
+
+            gradient_sigma += delta_y
+                * (skew
+                    * mu_sub_x
+                    * neg_half_mu_sub_x_squared_div_sigma_squared_exp
+                    * neg_half_lam_squared_mu_sub_x_squared_div_sigma_square_exp
+                    / (sqrt_pi_sigma_square)
+                    - 2.0
+                        * amp
+                        * mu_sub_x_squared
+                        * erf_sqrt_2_lam_mu_sub_x_div_two_sigma_plus_one
+                        * neg_half_mu_sub_x_squared_div_sigma_squared_exp
+                        / sigma_cubed)
+                + 1.0;
+
+            gradient_lambda += delta_skew
+                * mu_sub_x
+                * delta_y
+                * neg_half_mu_sub_x_squared_div_sigma_squared_exp
+                * neg_half_lam_squared_mu_sub_x_squared_div_sigma_square_exp
+                / sqrt_pi_sigma
+                + 1.0;
+
+            gradient_amplitude += -2.0
+                * delta_y
+                * erf_sqrt_2_lam_mu_sub_x_div_two_sigma_plus_one
+                * neg_half_mu_sub_x_squared_div_sigma_squared_exp
+        }
+
+        let n = data.len() as f64;
+
+        Self::new(
+            gradient_mu / n,
+            gradient_sigma / n,
+            gradient_amplitude / n,
+            gradient_lambda / n,
+        )
+        .gradient_norm()
+    }
+
+    fn mu_gradient(&self, data: &PeakFitArgs) -> f64 {
         let amp = self.amplitude;
         let mu = self.mu;
         let sigma = self.sigma;
@@ -997,7 +1137,7 @@ impl SkewedGaussianPeakShape {
         grad / data.len() as f64
     }
 
-    pub fn sigma_gradient(&self, data: &PeakFitArgs) -> f64 {
+    fn sigma_gradient(&self, data: &PeakFitArgs) -> f64 {
         let amp = self.amplitude;
         let mu = self.mu;
         let sigma = self.sigma;
@@ -1033,7 +1173,7 @@ impl SkewedGaussianPeakShape {
         grad / data.len() as f64
     }
 
-    pub fn amplitude_gradient(&self, data: &PeakFitArgs) -> f64 {
+    fn amplitude_gradient(&self, data: &PeakFitArgs) -> f64 {
         let amp = self.amplitude;
         let mu = self.mu;
         let sigma = self.sigma;
@@ -1056,7 +1196,7 @@ impl SkewedGaussianPeakShape {
         grad / data.len() as f64
     }
 
-    pub fn lambda_gradient(&self, data: &PeakFitArgs) -> f64 {
+    fn lambda_gradient(&self, data: &PeakFitArgs) -> f64 {
         let amp = self.amplitude;
         let mu = self.mu;
         let sigma = self.sigma;
@@ -1190,12 +1330,106 @@ impl BiGaussianPeakShape {
     }
 
     pub fn gradient(&self, data: &PeakFitArgs) -> BiGaussianPeakShape {
-        let mut g = [
+        let mu = self.mu;
+        let amp = self.amplitude;
+        let sigma_low = self.sigma_low;
+        let sigma_high = self.sigma_high;
+
+        let sigma_low_squared = sigma_low.powi(2);
+        let sigma_high_squared = sigma_high.powi(2);
+        let sigma_low_cubed = sigma_low.powi(3);
+        let sigma_high_cubed = sigma_high.powi(3);
+        let two_mu = mu * 2.0;
+        let neg_half_amp = -0.5 * amp;
+
+        let mut gradient_mu = 0.0;
+        let mut gradient_sigma_high = 0.0;
+        let mut gradient_sigma_low = 0.0;
+        let mut gradient_amplitude = 0.0;
+
+        for (x, y) in data.iter() {
+            let mu_sub_x_squared = (mu - x).powi(2);
+            let neg_half_mu_sub_x_squared = -0.5 * mu_sub_x_squared;
+
+            if mu >= x {
+                let neg_half_mu_sub_x_squared_div_sigma_low_squared =
+                    neg_half_mu_sub_x_squared / sigma_low_squared;
+
+                let neg_half_mu_sub_x_squared_div_sigma_low_squared_exp =
+                    neg_half_mu_sub_x_squared_div_sigma_low_squared.exp();
+                let delta_y =
+                    -2.0 * (y - amp * neg_half_mu_sub_x_squared_div_sigma_low_squared_exp);
+
+                gradient_mu += delta_y
+                    * (neg_half_amp
+                        * (two_mu - 2.0 * x)
+                        * neg_half_mu_sub_x_squared_div_sigma_low_squared_exp
+                        / sigma_low_squared)
+                    + 1.0;
+
+                gradient_sigma_high += 1.0;
+
+                gradient_sigma_low += delta_y
+                    * (amp
+                        * mu_sub_x_squared
+                        * neg_half_mu_sub_x_squared_div_sigma_low_squared_exp
+                        / sigma_low_cubed)
+                    + 1.0;
+
+                gradient_amplitude += delta_y * neg_half_mu_sub_x_squared_div_sigma_low_squared_exp
+            } else {
+                let neg_half_mu_sub_x_squared_div_sigma_high_squared =
+                    neg_half_mu_sub_x_squared / sigma_high_squared;
+
+                let neg_half_mu_sub_x_squared_div_sigma_high_squared_exp =
+                    neg_half_mu_sub_x_squared_div_sigma_high_squared.exp();
+
+                let delta_y =
+                    -2.0 * (y - amp * neg_half_mu_sub_x_squared_div_sigma_high_squared_exp);
+
+                gradient_mu += delta_y
+                    * (neg_half_amp
+                        * (two_mu - 2.0 * x)
+                        * neg_half_mu_sub_x_squared_div_sigma_high_squared_exp
+                        / sigma_high_squared)
+                    + 1.0;
+
+                gradient_sigma_high += delta_y
+                    * (amp
+                        * mu_sub_x_squared
+                        * neg_half_mu_sub_x_squared_div_sigma_high_squared_exp
+                        / sigma_high_cubed)
+                    + 1.0;
+
+                gradient_sigma_low += 1.0;
+
+                gradient_amplitude += delta_y * neg_half_mu_sub_x_squared_div_sigma_high_squared_exp
+            }
+        }
+
+        let n = data.len() as f64;
+
+        BiGaussianPeakShape::new(
+            gradient_mu / n,
+            gradient_sigma_low / n,
+            gradient_sigma_high / n,
+            gradient_amplitude / n,
+        )
+        .gradient_norm()
+    }
+
+    pub fn gradient_split(&self, data: &PeakFitArgs) -> BiGaussianPeakShape {
+        let g = Self::new(
             self.gradient_mu(&data),
             self.gradient_sigma_low(&data),
             self.gradient_sigma_high(&data),
             self.gradient_amplitude(&data),
-        ];
+        );
+        g.gradient_norm()
+    }
+
+    fn gradient_norm(&self) -> Self {
+        let mut g = [self.mu, self.sigma_low, self.sigma_high, self.amplitude];
         let gradnorm: f64 = g.iter().map(|f| f.abs()).sum::<f64>() / g.len() as f64;
         if gradnorm > 1.0 {
             g[0] /= gradnorm;
@@ -1221,15 +1455,19 @@ impl BiGaussianPeakShape {
                 let neg_half_mu_sub_x_squared = -0.5 * mu_sub_x_squared;
 
                 if mu >= x {
-                    -2.0 * (y - amp * (neg_half_mu_sub_x_squared / sigma_low_squared).exp()) * (neg_half_amp
-                        * (2.0 * mu - 2.0 * x)
-                        * (neg_half_mu_sub_x_squared / sigma_low_squared).exp()
-                        / sigma_low_squared) + 1.0
+                    -2.0 * (y - amp * (neg_half_mu_sub_x_squared / sigma_low_squared).exp())
+                        * (neg_half_amp
+                            * (2.0 * mu - 2.0 * x)
+                            * (neg_half_mu_sub_x_squared / sigma_low_squared).exp()
+                            / sigma_low_squared)
+                        + 1.0
                 } else {
-                    -2.0 * (y - amp * (neg_half_mu_sub_x_squared / sigma_high_squared).exp()) * (neg_half_amp
-                        * (2.0 * mu - 2.0 * x)
-                        * (neg_half_mu_sub_x_squared / sigma_high_squared).exp()
-                        / sigma_high_squared) + 1.0
+                    -2.0 * (y - amp * (neg_half_mu_sub_x_squared / sigma_high_squared).exp())
+                        * (neg_half_amp
+                            * (2.0 * mu - 2.0 * x)
+                            * (neg_half_mu_sub_x_squared / sigma_high_squared).exp()
+                            / sigma_high_squared)
+                        + 1.0
                 }
             })
             .sum::<f64>()
@@ -1242,18 +1480,21 @@ impl BiGaussianPeakShape {
         let sigma_low = self.sigma_low;
         let sigma_high = self.sigma_high;
 
+        let sigma_low_squared = sigma_low.powi(2);
+        let sigma_high_squared = sigma_high.powi(2);
+        let sigma_high_cubed = sigma_high.powi(3);
+
         data.iter()
             .map(|(x, y)| {
                 -2.0 * (y - if mu >= x {
-                    amp * (-1_f64 / 2.0 * (-mu + x).powi(2) / sigma_low.powi(2)).exp()
+                    amp * (-0.5 * (-mu + x).powi(2) / sigma_low_squared).exp()
                 } else {
-                    amp * (-1_f64 / 2.0 * (-mu + x).powi(2) / sigma_high.powi(2)).exp()
+                    amp * (-0.5 * (-mu + x).powi(2) / sigma_high_squared).exp()
                 }) * if mu >= x {
                     0.0
                 } else {
-                    amp * (-mu + x).powi(2)
-                        * (-1_f64 / 2.0 * (-mu + x).powi(2) / sigma_high.powi(2)).exp()
-                        / sigma_high.powi(3)
+                    amp * (-mu + x).powi(2) * (-0.5 * (-mu + x).powi(2) / sigma_high_squared).exp()
+                        / sigma_high_cubed
                 } + 1.0
             })
             .sum::<f64>()
@@ -1266,16 +1507,19 @@ impl BiGaussianPeakShape {
         let sigma_low = self.sigma_low;
         let sigma_high = self.sigma_high;
 
+        let sigma_low_squared = sigma_low.powi(2);
+        let sigma_high_squared = sigma_high.powi(2);
+        let sigma_low_cubed = sigma_low.powi(3);
+
         data.iter()
             .map(|(x, y)| {
                 -2.0 * (y - if mu >= x {
-                    amp * (-1_f64 / 2.0 * (-mu + x).powi(2) / sigma_low.powi(2)).exp()
+                    amp * (-0.5 * (-mu + x).powi(2) / sigma_low_squared).exp()
                 } else {
-                    amp * (-1_f64 / 2.0 * (-mu + x).powi(2) / sigma_high.powi(2)).exp()
+                    amp * (-0.5 * (-mu + x).powi(2) / sigma_high_squared).exp()
                 }) * if mu >= x {
-                    amp * (-mu + x).powi(2)
-                        * (-1_f64 / 2.0 * (-mu + x).powi(2) / sigma_low.powi(2)).exp()
-                        / sigma_low.powi(3)
+                    amp * (-mu + x).powi(2) * (-0.5 * (-mu + x).powi(2) / sigma_low_squared).exp()
+                        / sigma_low_cubed
                 } else {
                     0.0
                 } + 1.0
@@ -1290,16 +1534,19 @@ impl BiGaussianPeakShape {
         let sigma_low = self.sigma_low;
         let sigma_high = self.sigma_high;
 
+        let sigma_low_squared = sigma_low.powi(2);
+        let sigma_high_squared = sigma_high.powi(2);
+
         data.iter()
             .map(|(x, y)| {
                 -2.0 * (y - if mu >= x {
-                    amp * (-1_f64 / 2.0 * (-mu + x).powi(2) / sigma_low.powi(2)).exp()
+                    amp * (-0.5 * (-mu + x).powi(2) / sigma_low_squared).exp()
                 } else {
-                    amp * (-1_f64 / 2.0 * (-mu + x).powi(2) / sigma_high.powi(2)).exp()
+                    amp * (-0.5 * (-mu + x).powi(2) / sigma_high_squared).exp()
                 }) * if mu >= x {
-                    (-1_f64 / 2.0 * (-mu + x).powi(2) / sigma_low.powi(2)).exp()
+                    (-0.5 * (-mu + x).powi(2) / sigma_low_squared).exp()
                 } else {
-                    (-1_f64 / 2.0 * (-mu + x).powi(2) / sigma_high.powi(2)).exp()
+                    (-0.5 * (-mu + x).powi(2) / sigma_high_squared).exp()
                 }
             })
             .sum::<f64>()
@@ -1342,7 +1589,9 @@ pub struct PeakShapeFitter<'a, 'b, T: PeakShapeModel + Debug> {
     pub model: Option<T>,
 }
 
-impl<'a, 'b, T: PeakShapeModel + Debug> PeakShapeModelFitter<'a, 'b> for PeakShapeFitter<'a, 'b, T> {
+impl<'a, 'b, T: PeakShapeModel + Debug> PeakShapeModelFitter<'a, 'b>
+    for PeakShapeFitter<'a, 'b, T>
+{
     type ModelType = T;
 
     fn from_args(args: PeakFitArgs<'a, 'b>) -> Self {
@@ -1529,10 +1778,16 @@ impl PeakShapeModel for PeakShape {
 
     fn gradient_update(&mut self, gradient: Self, learning_rate: f64) {
         match (self, gradient) {
-            (Self::Gaussian(this), Self::Gaussian(gradient)) => {this.gradient_update(gradient, learning_rate);},
-            (Self::BiGaussian(this), Self::BiGaussian(gradient)) => {this.gradient_update(gradient, learning_rate);},
-            (Self::SkewedGaussian(this), Self::SkewedGaussian(gradient)) => {this.gradient_update(gradient, learning_rate);},
-            (this, gradient) => panic!("Invalid gradient type {gradient:?} for model {this:?}")
+            (Self::Gaussian(this), Self::Gaussian(gradient)) => {
+                this.gradient_update(gradient, learning_rate);
+            }
+            (Self::BiGaussian(this), Self::BiGaussian(gradient)) => {
+                this.gradient_update(gradient, learning_rate);
+            }
+            (Self::SkewedGaussian(this), Self::SkewedGaussian(gradient)) => {
+                this.gradient_update(gradient, learning_rate);
+            }
+            (this, gradient) => panic!("Invalid gradient type {gradient:?} for model {this:?}"),
         };
     }
 
@@ -1721,7 +1976,8 @@ mod test {
         let gradient = model.gradient(&args);
 
         eprintln!("Initial:\n{model:?}");
-        eprintln!("Gradient:\n{:?}", gradient);
+        eprintln!("Gradient combo:\n{:?}", gradient);
+        eprintln!("Gradient split:\n{:?}", model.gradient_split(&args));
 
         let res = model.fit(args.borrow());
         let score = model.score(&args);

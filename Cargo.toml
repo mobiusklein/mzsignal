@@ -66,6 +66,10 @@ criterion = { version = "0.5.1", features = [ "html_reports" ] }
 name = "rebin"
 harness = false
 
+[[bench]]
+name = "peak_fit"
+harness = false
+
 [package.metadata.docs.rs]
 features = ["nalgebra", "parallelism"]
 no-default-features = true
