@@ -13,6 +13,8 @@ use mzpeaks::prelude::TimeArray;
 
 use crate::arrayops::{trapz, ArrayPair, ArrayPairSplit};
 
+/// An iterator over [`PeakFitArgs`] which explicitly casts the signal magnitude
+/// from `f32` to `f64`.
 pub struct PeakFitArgsIter<'a> {
     inner: std::iter::Zip<
         std::iter::Copied<std::slice::Iter<'a, f64>>,
@@ -47,11 +49,19 @@ impl<'a> PeakFitArgsIter<'a> {
     }
 }
 
+/// A point along a [`PeakFitArgs`] which produces the greatest
+/// valley between two peaks.
+///
+/// Produced by [`PeakFitArgs::locate_extrema`]
 #[derive(Debug, Default, Clone, Copy, PartialEq, PartialOrd)]
 pub struct SplittingPoint {
+    /// The signal magnitude of the first maximum point
     pub first_maximum_height: f32,
+    /// The signal magnitude at the nadir of the valley
     pub minimum_height: f32,
+    /// The signal magnitude of the second maximum point
     pub second_maximum_height: f32,
+    /// The time coordinate of the nadir of the valley
     pub minimum_time: f64,
 }
 
@@ -465,7 +475,7 @@ where
         data
     }
 
-    /// Fit peak shape models on this signal
+    /// Fit multiple peak models on this signal.
     fn fit_peaks_with(&'a self, config: FitConfig) -> SplittingPeakShapeFitter<'a, 'a> {
         let data: PeakFitArgs<'a, 'a> = self.as_peak_shape_args();
         let mut model = SplittingPeakShapeFitter::new(data);
@@ -498,21 +508,28 @@ pub struct FitConfig {
 }
 
 impl FitConfig {
+    /// The maximum number of iterations to attempt when fitting a peak model
     pub fn max_iter(mut self, max_iter: usize) -> Self {
         self.max_iter = max_iter;
         self
     }
 
+    /// The rate at which model parameters are updated
     pub fn learning_rate(mut self, learning_rate: f64) -> Self {
         self.learning_rate = learning_rate;
         self
     }
 
+    /// The minimum distance between the current loss and the previous loss at which to decide the model
+    /// has converged
     pub fn convergence(mut self, convergence: f64) -> Self {
         self.convergence = convergence;
         self
     }
 
+    /// How much smoothing to perform before fitting a peak model.
+    ///
+    /// See [`PeakFitArgs::smooth`]
     pub fn smooth(mut self, smooth: usize) -> Self {
         self.smooth = smooth;
         self
@@ -530,11 +547,16 @@ impl Default for FitConfig {
     }
 }
 
+/// Describe a model fitting procedure's output
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ModelFitResult {
+    /// The loss at the end of the optimization run
     pub loss: f64,
+    /// The number of iterations run
     pub iterations: usize,
+    /// Whether or not the model converged within the specified number of iterations
     pub converged: bool,
+    /// Whether or not the model was able to fit *at all*
     pub success: bool,
 }
 
@@ -549,25 +571,48 @@ impl ModelFitResult {
     }
 }
 
+
+/// A set of peak shape model fitting behaviors that interacts with the [`PeakShapeModel`]
+/// trait associated with some peak signal data.
 pub trait PeakShapeModelFitter<'a, 'b> {
+    /// The [`PeakShapeModel`] that this type will fit.
     type ModelType: PeakShapeModel + Debug;
 
+    /// Construct a new [`PeakShapeModelFitter`] from [`PeakFitArgs`]
     fn from_args(args: PeakFitArgs<'a, 'b>) -> Self;
 
+    /// Compute the model gradient against the enclosed data
+    ///
+    /// # See also
+    /// [`PeakShapeModel::gradient`]
     fn gradient(&self, params: &Self::ModelType) -> Self::ModelType;
 
+    /// Compute the model loss function the enclosed data
+    ///
+    /// # See also
+    /// [`PeakShapeModel::loss`]
     fn loss(&self, params: &Self::ModelType) -> f64;
 
+    /// Borrow the enclosed data
     fn data(&self) -> &PeakFitArgs;
 
+    /// Iterate over the enclosed data
     fn iter(&self) -> PeakFitArgsIter {
         self.data().iter()
     }
 
+    /// Compute the model score against the enclosed data
+    ///
+    /// # See also
+    /// [`PeakShapeModel::score`]
     fn score(&self, model_params: &Self::ModelType) -> f64 {
         model_params.score(self.data())
     }
 
+    /// Do the actual model fitting on the enclosed data.
+    ///
+    /// By default, this will use the model which produces
+    /// the best loss.
     fn fit_model(
         &mut self,
         model_params: &mut Self::ModelType,
@@ -601,7 +646,7 @@ pub trait PeakShapeModelFitter<'a, 'b> {
                 best_params = params.clone();
             }
 
-            if (last_loss - loss).abs() < config.convergence {
+            if ((last_loss - loss).abs()) / loss < config.convergence {
                 log::trace!("{it}: Convergence = {}", last_loss - loss);
                 converged = true;
                 break;
@@ -622,20 +667,39 @@ pub trait PeakShapeModelFitter<'a, 'b> {
 pub trait PeakShapeModel: Clone {
     type Fitter<'a, 'b>: PeakShapeModelFitter<'a, 'b, ModelType = Self>;
 
+    /// Compute the theoretical intensity at a specified coordinate
+    ///
+    /// # See also
+    /// [`PeakShapeModel::predict`]
+    /// [`PeakShapeModel::predict_iter`]
     fn density(&self, x: f64) -> f64;
 
+    /// Update the parameters of the model based upon the `gradient` and a
+    /// given learning rate.
     fn gradient_update(&mut self, gradient: Self, learning_rate: f64);
 
+    /// Given a coordinate sequence, produce the complementary sequence of theoretical intensities
+    ///
+    /// # See also
+    /// [`PeakShapeModel::density`]
+    /// [`PeakShapeModel::predict_iter`]
     fn predict(&self, times: &[f64]) -> Vec<f64> {
         times.iter().map(|t| self.density(*t)).collect()
     }
 
+    /// Given a coordinate iterator, produce the complementary iterator of theoretical intensities
+    ///
+    /// # See also
+    /// [`PeakShapeModel::density`]
+    /// [`PeakShapeModel::predict`]
     fn predict_iter<I: IntoIterator<Item = f64>>(&self, times: I) -> impl Iterator<Item = f64> {
         times.into_iter().map(|t| self.density(t))
     }
 
+    /// Compute the gradient of the loss function for parameter optimization.
     fn gradient(&self, data: &PeakFitArgs) -> Self;
 
+    /// Compute the loss function for optimization, mean-squared error
     fn loss(&self, data: &PeakFitArgs) -> f64 {
         data.iter()
             .map(|(t, i)| (i - self.density(t)).powi(2))
@@ -643,6 +707,8 @@ pub trait PeakShapeModel: Clone {
             / data.len() as f64
     }
 
+    /// Compute the difference between the observed signal and the theoretical signal,
+    /// clamping the value to be non-negative
     fn residuals<'a, 'b>(&self, data: &PeakFitArgs<'a, 'b>) -> PeakFitArgs<'a, 'b> {
         let mut data = data.borrow();
         for (yhat, y) in self
@@ -657,6 +723,14 @@ pub trait PeakShapeModel: Clone {
         data
     }
 
+    /// Compute the 1 - ratio of the peak shape model squared error to
+    /// a straight line linear model squared error.
+    ///
+    /// This value is 0 when the ordinary linear model is much better than the peak
+    /// shape model, and approaches 1.0 when the peak shape model is a much better fit
+    /// of the data than straight line model.
+    ///
+    /// *NOTE*: The function output is clamped to the $`[0, 1]`$ range for consistency
     fn score(&self, data: &PeakFitArgs) -> f64 {
         let linear_resid = data.linear_residuals();
         let mut shape_resid = 0.0;
@@ -665,16 +739,23 @@ pub trait PeakShapeModel: Clone {
             shape_resid += (y - self.density(x)).powi(2);
         }
 
-        let line_test = shape_resid / linear_resid;
-        1.0 - line_test.max(1e-5)
+        let line_test = shape_resid / (if linear_resid > 0.0 { linear_resid } else { 1.0 });
+        (1.0 - line_test.max(1e-5)).max(0.0).min(1.0)
     }
 
-    fn guess(args: &PeakFitArgs) -> Self;
+    /// Given observed data, compute some initial parameters.
+    ///
+    /// This is the preferred means of producing an initial model
+    /// for some data, prior to fitting.
+    fn guess(data: &PeakFitArgs) -> Self;
 
-    fn fit(&mut self, args: PeakFitArgs) -> ModelFitResult {
-        self.fit_with(args, Default::default())
+    /// Fit the peak shape model to some data using the default
+    /// [`FitConfig`] settings.
+    fn fit(&mut self, data: PeakFitArgs) -> ModelFitResult {
+        self.fit_with(data, Default::default())
     }
 
+    /// Fit the peak shape model to some data using `config` options
     fn fit_with(&mut self, args: PeakFitArgs, config: FitConfig) -> ModelFitResult {
         let mut fitter = Self::Fitter::from_args(args);
         fitter.fit_model(self, config)
@@ -702,6 +783,7 @@ impl GaussianPeakShape {
         }
     }
 
+    /// Given observed data, compute some initial parameters
     pub fn guess(data: &PeakFitArgs) -> Self {
         if data.len() == 0 {
             return Self::new(1.0, 1.0, 1.0);
@@ -713,10 +795,12 @@ impl GaussianPeakShape {
         Self::new(mu, sigma, amplitude)
     }
 
+    /// Compute the regularization term for the loss function
     pub fn regularization(&self) -> f64 {
         self.mu + self.sigma
     }
 
+    /// Compute the loss function for optimization, mean-squared error
     pub fn loss(&self, data: &PeakFitArgs) -> f64 {
         data.iter()
             .map(|(t, i)| (i - self.density(t)).powi(2))
@@ -727,18 +811,6 @@ impl GaussianPeakShape {
 
     pub fn density(&self, x: f64) -> f64 {
         self.amplitude * (-0.5 * (x - self.mu).powi(2) / self.sigma.powi(2)).exp()
-    }
-
-    pub fn from_slice(data: &[f64]) -> Self {
-        Self {
-            mu: data[0],
-            sigma: data[1],
-            amplitude: data[2],
-        }
-    }
-
-    pub fn to_vec(&self) -> Vec<f64> {
-        vec![self.mu, self.sigma, self.amplitude]
     }
 
     pub fn gradient(&self, data: &PeakFitArgs) -> Self {
@@ -893,6 +965,8 @@ impl GaussianPeakShape {
         grad / data.len() as f64
     }
 
+    /// A non-optimized version of the gradient calculation used for testing
+    /// correctness
     pub fn gradient_split(&self, data: &PeakFitArgs) -> Self {
         Self::new(
             self.mu_gradient(&data),
@@ -902,6 +976,8 @@ impl GaussianPeakShape {
         .gradient_norm()
     }
 
+    /// Update the parameters of the model based upon the `gradient` and a
+    /// given learning rate.
     pub fn gradient_update(&mut self, gradient: Self, learning_rate: f64) {
         self.mu -= gradient.mu * learning_rate;
         self.sigma -= gradient.sigma * learning_rate;
@@ -960,6 +1036,7 @@ impl SkewedGaussianPeakShape {
         }
     }
 
+    /// Given observed data, compute some initial parameters
     pub fn guess(data: &PeakFitArgs) -> Self {
         if data.len() == 0 {
             return Self::new(1.0, 1.0, 1.0, 1.0);
@@ -972,29 +1049,20 @@ impl SkewedGaussianPeakShape {
         Self::new(mu, sigma, amplitude, lambda)
     }
 
+    /// Compute the theoretical intensity at a specified coordinate
     pub fn density(&self, x: f64) -> f64 {
         self.amplitude
             * (erf(SQRT_2 * self.lambda * (-self.mu + x) / (2.0 * self.sigma)) + 1.0)
             * (-0.5 * (-self.mu + x).powi(2) / self.sigma.powi(2)).exp()
     }
 
-    pub fn from_slice(data: &[f64]) -> Self {
-        Self {
-            mu: data[0],
-            sigma: data[1],
-            amplitude: data[2],
-            lambda: data[3],
-        }
-    }
-
+    /// Compute the regularization term for the loss function
     pub fn regularization(&self) -> f64 {
         self.mu + self.sigma + self.lambda
     }
 
-    pub fn to_vec(&self) -> Vec<f64> {
-        vec![self.mu, self.sigma, self.amplitude, self.lambda]
-    }
-
+    /// A non-optimized version of the gradient calculation used for testing
+    /// correctness
     pub fn gradient_split(&self, data: &PeakFitArgs) -> Self {
         Self::new(
             self.mu_gradient(&data),
@@ -1017,6 +1085,7 @@ impl SkewedGaussianPeakShape {
         SkewedGaussianPeakShape::new(g[0], g[1], g[2], g[3])
     }
 
+    /// Compute the gradient of the loss function for parameter optimization.
     pub fn gradient(&self, data: &PeakFitArgs) -> Self {
         let amp = self.amplitude;
         let mu = self.mu;
@@ -1230,6 +1299,8 @@ impl SkewedGaussianPeakShape {
         grad / data.len() as f64
     }
 
+    /// Update the parameters of the model based upon the `gradient` and a
+    /// given learning rate.
     pub fn gradient_update(&mut self, gradient: Self, learning_rate: f64) {
         self.mu -= gradient.mu * learning_rate;
         self.sigma -= gradient.sigma * learning_rate;
@@ -1260,6 +1331,7 @@ impl PeakShapeModel for SkewedGaussianPeakShape {
         self.gradient(data)
     }
 
+    /// Compute the loss function for optimization, mean-squared error
     fn loss(&self, data: &PeakFitArgs) -> f64 {
         data.iter()
             .map(|(t, i)| (i - self.density(t)).powi(2))
@@ -1273,7 +1345,7 @@ impl PeakShapeModel for SkewedGaussianPeakShape {
 ///
 /// ```math
 /// y = \begin{cases}
-///     a\exp\left({-\frac{-(\mu - x)^2}{2\sigma_a^2}}\right) & x \le \mu \\
+///     a\exp\left({\frac{-(\mu - x)^2}{2\sigma_a^2}}\right) & x \le \mu \\
 ///     a\exp\left({\frac{-(\mu - x)^2}{2\sigma_b^2}}\right) & x \gt x
 /// \end{cases}
 /// ```
@@ -1295,6 +1367,7 @@ impl BiGaussianPeakShape {
         }
     }
 
+    /// Given observed data, compute some initial parameters
     pub fn guess(data: &PeakFitArgs) -> Self {
         if data.len() == 0 {
             return Self::new(1.0, 1.0, 1.0, 1.0);
@@ -1306,6 +1379,7 @@ impl BiGaussianPeakShape {
         Self::new(mu, sigma, sigma, amplitude)
     }
 
+    /// Compute the theoretical intensity at a specified coordinate
     pub fn density(&self, x: f64) -> f64 {
         if self.mu >= x {
             self.amplitude * (-0.5 * (-self.mu + x).powi(2) / self.sigma_low.powi(2)).exp()
@@ -1314,6 +1388,8 @@ impl BiGaussianPeakShape {
         }
     }
 
+    /// Update the parameters of the model based upon the `gradient` and a
+    /// given learning rate.
     pub fn gradient_update(&mut self, gradient: Self, learning_rate: f64) {
         self.mu -= gradient.mu * learning_rate;
         self.sigma_low -= gradient.sigma_low * learning_rate;
@@ -1325,10 +1401,12 @@ impl BiGaussianPeakShape {
         }
     }
 
+    /// Compute the regularization term for the loss function
     pub fn regularization(&self) -> f64 {
         self.mu + self.sigma_low + self.sigma_high
     }
 
+    /// Compute the gradient of the loss function for parameter optimization.
     pub fn gradient(&self, data: &PeakFitArgs) -> BiGaussianPeakShape {
         let mu = self.mu;
         let amp = self.amplitude;
@@ -1418,6 +1496,8 @@ impl BiGaussianPeakShape {
         .gradient_norm()
     }
 
+    /// A non-optimized version of the gradient calculation used for testing
+    /// correctness
     pub fn gradient_split(&self, data: &PeakFitArgs) -> BiGaussianPeakShape {
         let g = Self::new(
             self.gradient_mu(&data),
@@ -1692,7 +1772,7 @@ impl<'a, 'b, T: PeakShapeModel + Debug> PeakShapeFitter<'a, 'b, T> {
 }
 
 /// A dispatching peak shape model that can represent a variety of different
-/// peak shapes
+/// peak shapes.
 #[derive(Debug, Clone, Copy)]
 pub enum PeakShape {
     Gaussian(GaussianPeakShape),
@@ -1744,26 +1824,50 @@ impl PeakShape {
         Self::BiGaussian(BiGaussianPeakShape::guess(data))
     }
 
+    /// Compute the theoretical intensity at a specified coordinate
     pub fn density(&self, x: f64) -> f64 {
         dispatch_peak!(self, p, p.density(x))
     }
 
+    /// Given a coordinate sequence, produce the complementary sequence of theoretical intensities
+    ///
+    /// # See also
+    /// [`PeakShape::density`]
     pub fn predict(&self, times: &[f64]) -> Vec<f64> {
         dispatch_peak!(self, p, p.predict(times))
     }
 
+    /// Compute the difference between the observed signal and the theoretical signal,
+    /// clamping the value to be non-negative
+    ///
+    /// # See also
+    /// [`PeakShapeModel::residuals`]
     pub fn residuals<'a, 'b>(&self, data: &PeakFitArgs<'a, 'b>) -> PeakFitArgs<'a, 'b> {
         dispatch_peak!(self, p, p.residuals(data))
     }
 
+    /// Compute the 1 - ratio of the peak shape model squared error to
+    /// a straight line linear model squared error.
+    ///
+    /// # See also
+    /// [`PeakShapeModel::score`]
     pub fn score(&self, data: &PeakFitArgs) -> f64 {
         dispatch_peak!(self, p, p.score(data))
     }
 
+    /// Fit the peak shape model to some data using the default
+    /// [`FitConfig`] settings.
+    ///
+    /// # See also
+    /// [`PeakShapeModel::fit`]
     pub fn fit(&mut self, args: PeakFitArgs) -> ModelFitResult {
         dispatch_peak!(self, p, p.fit_with(args, Default::default()))
     }
 
+    /// Fit the peak shape model to some data using `config` options
+    ///
+    /// # See also
+    /// [`PeakShapeModel::fit_with`]
     pub fn fit_with(&mut self, args: PeakFitArgs, config: FitConfig) -> ModelFitResult {
         dispatch_peak!(self, p, p.fit_with(args, config))
     }
@@ -1804,6 +1908,7 @@ impl PeakShapeModel for PeakShape {
     }
 }
 
+/// Represent a combination of multiple [`PeakShape`] models
 #[derive(Debug, Default, Clone)]
 pub struct MultiPeakShapeFit {
     fits: Vec<PeakShape>,
@@ -1860,7 +1965,8 @@ impl MultiPeakShapeFit {
     }
 }
 
-/// Fitter for multiple peak shapes on the signal
+/// Fitter for multiple peak shapes on the signal split across
+/// multiple disjoint intervals
 #[derive(Debug, Clone)]
 pub struct SplittingPeakShapeFitter<'a, 'b> {
     pub data: PeakFitArgs<'a, 'b>,
@@ -1893,6 +1999,7 @@ impl<'a> SplittingPeakShapeFitter<'a, 'a> {
         (model, fit_result)
     }
 
+    /// See [`PeakShapeFitter::fit_model`]
     pub fn fit_with(&mut self, config: FitConfig) {
         let partition_points = self.data.locate_extrema(None);
         let chunks = self.data.split_at(partition_points.as_slice());
@@ -1904,10 +2011,12 @@ impl<'a> SplittingPeakShapeFitter<'a, 'a> {
         }
     }
 
+    /// See [`PeakShapeFitter::residuals`]
     pub fn residuals(&self) -> PeakFitArgs<'_, '_> {
         self.peak_fits.residuals(&self.data)
     }
 
+    /// See [`PeakShapeFitter::predicted`]
     pub fn predicted(&self) -> PeakFitArgs<'_, '_> {
         let predicted = self
             .peak_fits
@@ -1920,6 +2029,7 @@ impl<'a> SplittingPeakShapeFitter<'a, 'a> {
         dup
     }
 
+    /// See [`PeakShapeFitter::score`]
     pub fn score(&self) -> f64 {
         self.peak_fits.score(&self.data)
     }
