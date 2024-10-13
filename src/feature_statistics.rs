@@ -1,10 +1,34 @@
+//! Fitting methods for elution profile peak shape models.
+//!
+//! This covers multiple peak shape kinds, but has limited support
+//! for *multi-modal* peak shapes.
+//!
+//! Most of the fitting methods expect to work with [`PeakFitArgs`] which
+//! can be created from borrowed signal-over-time data.
+//!
+//! ```rust
+//! # use mzsignal::text::load_feature_table;
+//! use mzpeaks::feature::Feature;
+//! use mzsignal::feature_statistics::{PeakFitArgs, SplittingPeakShapeFitter, FitConfig};
+//!
+//! # fn main() {
+//! let features: Vec<Feature<_, _>> = load_feature_table("test/data/features_graph.txt").unwrap();
+//! let feature = &features[10979];
+//! let args = PeakFitArgs::from(feature);
+//! let mut fitter = SplittingPeakShapeFitter::new(args);
+//! fitter.fit_with(FitConfig::default().max_iter(10_000).smooth(1));
+//! let z = fitter.score();
+//! eprintln!("Score: {z}");
+//! # }
+//!
+//! ```
+//!
 use std::{
-    borrow::{Borrow, Cow},
+    borrow::Cow,
     f64::consts::{PI, SQRT_2},
     fmt::Debug,
     iter::FusedIterator,
-    marker::PhantomData,
-    ops::Range,
+    ops::{Deref, Range},
 };
 
 use libm::erf;
@@ -15,6 +39,8 @@ use crate::arrayops::{trapz, ArrayPair, ArrayPairSplit};
 
 /// An iterator over [`PeakFitArgs`] which explicitly casts the signal magnitude
 /// from `f32` to `f64`.
+///
+/// This conversion is done specifically for convenience during model fitting.
 pub struct PeakFitArgsIter<'a> {
     inner: std::iter::Zip<
         std::iter::Copied<std::slice::Iter<'a, f64>>,
@@ -90,7 +116,7 @@ pub struct PeakFitArgs<'a, 'b> {
     pub intensity: Cow<'b, [f32]>,
 }
 
-impl<'c, 'd, 'a: 'c, 'b: 'd, 'e: 'c + 'd> PeakFitArgs<'a, 'b> {
+impl<'c, 'd, 'a: 'c, 'b: 'd, 'e: 'c + 'd + 'a + 'b> PeakFitArgs<'a, 'b> {
     pub fn new(time: Cow<'a, [f64]>, intensity: Cow<'b, [f32]>) -> Self {
         assert_eq!(
             time.len(),
@@ -104,7 +130,7 @@ impl<'c, 'd, 'a: 'c, 'b: 'd, 'e: 'c + 'd> PeakFitArgs<'a, 'b> {
 
     /// Apply [`moving_average_dyn`](crate::smooth::moving_average_dyn) to the signal intensity
     /// returning a new [`PeakFitArgs`].
-    pub fn smooth(&self, window_size: usize) -> PeakFitArgs<'a, 'd> {
+    pub fn smooth(&'e self, window_size: usize) -> PeakFitArgs<'a, 'd> {
         let mut store = self.borrow();
         let sink = store.intensity.to_mut();
         crate::smooth::moving_average_dyn(&self.intensity, sink.as_mut_slice(), window_size * 3);
@@ -335,17 +361,21 @@ impl<'c, 'd, 'a: 'c, 'b: 'd, 'e: 'c + 'd> PeakFitArgs<'a, 'b> {
     }
 
     /// Create a new [`PeakFitArgs`] from this one that borrows its data from this one
-    pub fn borrow(&self) -> Self {
-        Self::new(
-            match &self.time {
-                Cow::Borrowed(x) => Cow::Borrowed(*x),
-                Cow::Owned(_) => self.time.clone(),
-            },
-            match &self.intensity {
-                Cow::Borrowed(x) => Cow::Borrowed(*x),
-                Cow::Owned(_) => self.intensity.clone(),
-            },
-        )
+    pub fn borrow(&'e self) -> PeakFitArgs<'c, 'd> {
+        let is_time_owned = matches!(self.time, Cow::Owned(_));
+        let is_intensity_owned = matches!(self.intensity, Cow::Owned(_));
+        let time = if is_time_owned {
+            Cow::Borrowed(self.time.deref())
+        } else {
+            self.time.clone()
+        };
+
+        let intensity = if is_intensity_owned {
+            Cow::Borrowed(self.intensity.deref())
+        } else {
+            self.intensity.clone()
+        };
+        Self::new(time, intensity)
     }
 
     /// Compute the "null model" residuals $`\sum_i(y_i - \bar{y})^2`$
@@ -396,7 +426,7 @@ impl<'c, 'd, 'a: 'c, 'b: 'd, 'e: 'c + 'd> PeakFitArgs<'a, 'b> {
     }
 
     /// Borrow this data as an [`ArrayPairSplit`]
-    pub fn as_array_pair(&self) -> ArrayPairSplit<'a, 'b> {
+    pub fn as_array_pair(&'e self) -> ArrayPairSplit<'a, 'b> {
         let this = self.borrow();
         ArrayPairSplit::new(this.time, this.intensity)
     }
@@ -571,7 +601,6 @@ impl ModelFitResult {
     }
 }
 
-
 /// A set of peak shape model fitting behaviors that interacts with the [`PeakShapeModel`]
 /// trait associated with some peak signal data.
 pub trait PeakShapeModelFitter<'a, 'b> {
@@ -664,6 +693,7 @@ pub trait PeakShapeModelFitter<'a, 'b> {
     }
 }
 
+/// A model of an elution profile peak shape that can be estimated using gradient descent
 pub trait PeakShapeModel: Clone {
     type Fitter<'a, 'b>: PeakShapeModelFitter<'a, 'b, ModelType = Self>;
 
@@ -709,7 +739,7 @@ pub trait PeakShapeModel: Clone {
 
     /// Compute the difference between the observed signal and the theoretical signal,
     /// clamping the value to be non-negative
-    fn residuals<'a, 'b>(&self, data: &PeakFitArgs<'a, 'b>) -> PeakFitArgs<'a, 'b> {
+    fn residuals<'a, 'b, 'e: 'a + 'b>(&self, data: &'e PeakFitArgs<'a, 'b>) -> PeakFitArgs<'a, 'b> {
         let mut data = data.borrow();
         for (yhat, y) in self
             .predict_iter(data.time.iter().copied())
@@ -739,7 +769,12 @@ pub trait PeakShapeModel: Clone {
             shape_resid += (y - self.density(x)).powi(2);
         }
 
-        let line_test = shape_resid / (if linear_resid > 0.0 { linear_resid } else { 1.0 });
+        let line_test = shape_resid
+            / (if linear_resid > 0.0 {
+                linear_resid
+            } else {
+                1.0
+            });
         (1.0 - line_test.max(1e-5)).max(0.0).min(1.0)
     }
 
@@ -767,7 +802,7 @@ pub trait PeakShapeModel: Clone {
 /// ```math
 /// y = a\exp\left({\frac{-(\mu - x)^2}{2\sigma^2}}\right)
 /// ```
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub struct GaussianPeakShape {
     pub mu: f64,
     pub sigma: f64,
@@ -1018,7 +1053,7 @@ impl PeakShapeModel for GaussianPeakShape {
 /// ```math
 /// y = a\left(\text{erf}\left({\sqrt{2} \lambda\frac{\mu - x}{2\sigma}}\right) + 1\right)\exp\left(-\frac{(\mu-x)^2}{2\sigma^2}\right)
 /// ```
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub struct SkewedGaussianPeakShape {
     pub mu: f64,
     pub sigma: f64,
@@ -1349,11 +1384,11 @@ impl PeakShapeModel for SkewedGaussianPeakShape {
 ///     a\exp\left({\frac{-(\mu - x)^2}{2\sigma_b^2}}\right) & x \gt x
 /// \end{cases}
 /// ```
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub struct BiGaussianPeakShape {
     pub mu: f64,
-    pub sigma_low: f64,
-    pub sigma_high: f64,
+    pub sigma_falling: f64,
+    pub sigma_rising: f64,
     pub amplitude: f64,
 }
 
@@ -1361,8 +1396,8 @@ impl BiGaussianPeakShape {
     pub fn new(mu: f64, sigma_low: f64, sigma_high: f64, amplitude: f64) -> Self {
         Self {
             mu,
-            sigma_low,
-            sigma_high,
+            sigma_falling: sigma_low,
+            sigma_rising: sigma_high,
             amplitude,
         }
     }
@@ -1382,9 +1417,9 @@ impl BiGaussianPeakShape {
     /// Compute the theoretical intensity at a specified coordinate
     pub fn density(&self, x: f64) -> f64 {
         if self.mu >= x {
-            self.amplitude * (-0.5 * (-self.mu + x).powi(2) / self.sigma_low.powi(2)).exp()
+            self.amplitude * (-0.5 * (-self.mu + x).powi(2) / self.sigma_falling.powi(2)).exp()
         } else {
-            self.amplitude * (-0.5 * (-self.mu + x).powi(2) / self.sigma_high.powi(2)).exp()
+            self.amplitude * (-0.5 * (-self.mu + x).powi(2) / self.sigma_rising.powi(2)).exp()
         }
     }
 
@@ -1392,8 +1427,8 @@ impl BiGaussianPeakShape {
     /// given learning rate.
     pub fn gradient_update(&mut self, gradient: Self, learning_rate: f64) {
         self.mu -= gradient.mu * learning_rate;
-        self.sigma_low -= gradient.sigma_low * learning_rate;
-        self.sigma_high -= gradient.sigma_high * learning_rate;
+        self.sigma_falling -= gradient.sigma_falling * learning_rate;
+        self.sigma_rising -= gradient.sigma_rising * learning_rate;
 
         self.amplitude -= gradient.amplitude * learning_rate;
         if self.amplitude < 0.0 {
@@ -1403,15 +1438,15 @@ impl BiGaussianPeakShape {
 
     /// Compute the regularization term for the loss function
     pub fn regularization(&self) -> f64 {
-        self.mu + self.sigma_low + self.sigma_high
+        self.mu + self.sigma_falling + self.sigma_rising
     }
 
     /// Compute the gradient of the loss function for parameter optimization.
     pub fn gradient(&self, data: &PeakFitArgs) -> BiGaussianPeakShape {
         let mu = self.mu;
         let amp = self.amplitude;
-        let sigma_low = self.sigma_low;
-        let sigma_high = self.sigma_high;
+        let sigma_low = self.sigma_falling;
+        let sigma_high = self.sigma_rising;
 
         let sigma_low_squared = sigma_low.powi(2);
         let sigma_high_squared = sigma_high.powi(2);
@@ -1501,15 +1536,15 @@ impl BiGaussianPeakShape {
     pub fn gradient_split(&self, data: &PeakFitArgs) -> BiGaussianPeakShape {
         let g = Self::new(
             self.gradient_mu(&data),
-            self.gradient_sigma_low(&data),
-            self.gradient_sigma_high(&data),
+            self.gradient_sigma_falling(&data),
+            self.gradient_sigma_rising(&data),
             self.gradient_amplitude(&data),
         );
         g.gradient_norm()
     }
 
     fn gradient_norm(&self) -> Self {
-        let mut g = [self.mu, self.sigma_low, self.sigma_high, self.amplitude];
+        let mut g = [self.mu, self.sigma_falling, self.sigma_rising, self.amplitude];
         let gradnorm: f64 = g.iter().map(|f| f.abs()).sum::<f64>() / g.len() as f64;
         if gradnorm > 1.0 {
             g[0] /= gradnorm;
@@ -1522,8 +1557,8 @@ impl BiGaussianPeakShape {
     fn gradient_mu(&self, data: &PeakFitArgs) -> f64 {
         let mu = self.mu;
         let amp = self.amplitude;
-        let sigma_low = self.sigma_low;
-        let sigma_high = self.sigma_high;
+        let sigma_low = self.sigma_falling;
+        let sigma_high = self.sigma_rising;
 
         let sigma_low_squared = sigma_low.powi(2);
         let sigma_high_squared = sigma_high.powi(2);
@@ -1554,11 +1589,11 @@ impl BiGaussianPeakShape {
             / data.len() as f64
     }
 
-    fn gradient_sigma_high(&self, data: &PeakFitArgs) -> f64 {
+    fn gradient_sigma_rising(&self, data: &PeakFitArgs) -> f64 {
         let mu = self.mu;
         let amp = self.amplitude;
-        let sigma_low = self.sigma_low;
-        let sigma_high = self.sigma_high;
+        let sigma_low = self.sigma_falling;
+        let sigma_high = self.sigma_rising;
 
         let sigma_low_squared = sigma_low.powi(2);
         let sigma_high_squared = sigma_high.powi(2);
@@ -1581,11 +1616,11 @@ impl BiGaussianPeakShape {
             / data.len() as f64
     }
 
-    fn gradient_sigma_low(&self, data: &PeakFitArgs) -> f64 {
+    fn gradient_sigma_falling(&self, data: &PeakFitArgs) -> f64 {
         let mu = self.mu;
         let amp = self.amplitude;
-        let sigma_low = self.sigma_low;
-        let sigma_high = self.sigma_high;
+        let sigma_low = self.sigma_falling;
+        let sigma_high = self.sigma_rising;
 
         let sigma_low_squared = sigma_low.powi(2);
         let sigma_high_squared = sigma_high.powi(2);
@@ -1611,8 +1646,8 @@ impl BiGaussianPeakShape {
     fn gradient_amplitude(&self, data: &PeakFitArgs) -> f64 {
         let mu = self.mu;
         let amp = self.amplitude;
-        let sigma_low = self.sigma_low;
-        let sigma_high = self.sigma_high;
+        let sigma_low = self.sigma_falling;
+        let sigma_high = self.sigma_rising;
 
         let sigma_low_squared = sigma_low.powi(2);
         let sigma_high_squared = sigma_high.powi(2);
@@ -1748,10 +1783,13 @@ impl<'a, 'b, T: PeakShapeModel + Debug> PeakShapeFitter<'a, 'b, T> {
         Self { data, model: None }
     }
 
+    /// Compute the model residuals over the observed time axis
     pub fn residuals(&self) -> PeakFitArgs<'_, '_> {
         self.model.as_ref().unwrap().residuals(&self.data)
     }
 
+    /// Create a synthetic signal profile using the observed time axis but use the model predicted signal
+    /// magnitude.
     pub fn predicted(&self) -> PeakFitArgs<'_, '_> {
         let predicted = self
             .model
@@ -1766,6 +1804,10 @@ impl<'a, 'b, T: PeakShapeModel + Debug> PeakShapeFitter<'a, 'b, T> {
         dup
     }
 
+    /// Compute the fitted model's score on the observed data
+    ///
+    /// # See also
+    /// [`PeakShapeModel::score`]
     pub fn score(&self) -> f64 {
         self.model.as_ref().unwrap().score(&self.data)
     }
@@ -1773,7 +1815,7 @@ impl<'a, 'b, T: PeakShapeModel + Debug> PeakShapeFitter<'a, 'b, T> {
 
 /// A dispatching peak shape model that can represent a variety of different
 /// peak shapes.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub enum PeakShape {
     Gaussian(GaussianPeakShape),
     SkewedGaussian(SkewedGaussianPeakShape),
@@ -1842,7 +1884,10 @@ impl PeakShape {
     ///
     /// # See also
     /// [`PeakShapeModel::residuals`]
-    pub fn residuals<'a, 'b>(&self, data: &PeakFitArgs<'a, 'b>) -> PeakFitArgs<'a, 'b> {
+    pub fn residuals<'a, 'b, 'e: 'a + 'b>(
+        &self,
+        data: &'e PeakFitArgs<'a, 'b>,
+    ) -> PeakFitArgs<'a, 'b> {
         dispatch_peak!(self, p, p.residuals(data))
     }
 
@@ -1927,7 +1972,10 @@ impl MultiPeakShapeFit {
         times.iter().map(|t| self.density(*t)).collect()
     }
 
-    pub fn residuals<'a, 'b>(&self, data: &PeakFitArgs<'a, 'b>) -> PeakFitArgs<'a, 'b> {
+    pub fn residuals<'a, 'b, 'e: 'a + 'b>(
+        &self,
+        data: &'e PeakFitArgs<'a, 'b>,
+    ) -> PeakFitArgs<'a, 'b> {
         let mut data = data.borrow();
         for (yhat, y) in data
             .time
@@ -1966,7 +2014,10 @@ impl MultiPeakShapeFit {
 }
 
 /// Fitter for multiple peak shapes on the signal split across
-/// multiple disjoint intervals
+/// multiple disjoint intervals.
+///
+/// This is preferred for "real world data" which may not be
+/// well behaved signal.
 #[derive(Debug, Clone)]
 pub struct SplittingPeakShapeFitter<'a, 'b> {
     pub data: PeakFitArgs<'a, 'b>,
@@ -2005,9 +2056,11 @@ impl<'a> SplittingPeakShapeFitter<'a, 'a> {
         let chunks = self.data.split_at(partition_points.as_slice());
 
         for chunk in chunks {
-            let (model, _fit_result) =
+            let (model, fit_result) =
                 self.fit_chunk_with(self.data.slice(chunk.clone()), config.clone());
-            self.peak_fits.push(model);
+            if fit_result.success {
+                self.peak_fits.push(model);
+            }
         }
     }
 
@@ -2042,6 +2095,7 @@ mod test {
         io::{self, prelude::*},
     };
 
+    use log::debug;
     use mzpeaks::{feature::Feature, Time, MZ};
 
     use super::*;
@@ -2062,6 +2116,17 @@ mod test {
                 $t1,
                 $t2,
                 $t1 - $t2,
+            );
+        };
+        ($t1:expr, $t2:expr, $tol:expr, $label:literal, $obj:ident) => {
+            assert!(
+                ($t1 - $t2).abs() < $tol,
+                "Observed {} {}, expected {}, difference {} from {:?}",
+                $label,
+                $t1,
+                $t2,
+                $t1 - $t2,
+                $obj
             );
         };
     }
@@ -2085,13 +2150,13 @@ mod test {
         };
         let gradient = model.gradient(&args);
 
-        eprintln!("Initial:\n{model:?}");
-        eprintln!("Gradient combo:\n{:?}", gradient);
-        eprintln!("Gradient split:\n{:?}", model.gradient_split(&args));
+        debug!("Initial:\n{model:?}");
+        debug!("Gradient combo:\n{:?}", gradient);
+        debug!("Gradient split:\n{:?}", model.gradient_split(&args));
 
-        let res = model.fit(args.borrow());
-        let score = model.score(&args);
-        eprintln!("{model:?}\n{res:?}\n{score}\n");
+        let _res = model.fit(args.borrow());
+        let _score = model.score(&args);
+        debug!("{model:?}\n{_res:?}\n{_score}\n");
 
         let expected = SkewedGaussianPeakShape {
             mu: 121.54820923262623,
@@ -2119,14 +2184,14 @@ mod test {
             fits: vec![
                 PeakShape::BiGaussian(BiGaussianPeakShape {
                     mu: 125.41112342515179,
-                    sigma_low: 0.2130619068583823,
-                    sigma_high: 0.22703724439718917,
+                    sigma_falling: 0.2130619068583823,
+                    sigma_rising: 0.22703724439718917,
                     amplitude: 2535197.152987912,
                 }),
                 PeakShape::BiGaussian(BiGaussianPeakShape {
                     mu: 126.05807704271226,
-                    sigma_low: 0.9997523697939726,
-                    sigma_high: 1.1813146384558728,
+                    sigma_falling: 0.9997523697939726,
+                    sigma_rising: 1.1813146384558728,
                     amplitude: 267102.87981724285,
                 }),
             ],
@@ -2134,8 +2199,8 @@ mod test {
 
         let mut fitter = SplittingPeakShapeFitter::new(args);
         fitter.fit_with(FitConfig::default().max_iter(10_000));
-        eprintln!("Score: {}", fitter.score());
-        eprintln!("Fits: {:?}", fitter.peak_fits);
+        debug!("Score: {}", fitter.score());
+        debug!("Fits: {:?}", fitter.peak_fits);
 
         for (exp, obs) in expected_fits.iter().zip(fitter.peak_fits.iter()) {
             let expected_mu = dispatch_peak!(exp, model, model.mu);
@@ -2159,32 +2224,31 @@ mod test {
 
         let observed_split_point = args.locate_extrema(None).unwrap();
 
-        eprintln!("Split Points: {:?}", observed_split_point,);
-
         assert_is_close!(
             expected_split_point.minimum_time,
             observed_split_point.minimum_time,
             1e-2,
-            "minimum_time"
+            "minimum_time",
+            observed_split_point
         );
 
         let mut fitter = SplittingPeakShapeFitter::new(args.borrow());
         fitter.fit_with(FitConfig::default().max_iter(10_000).smooth(3));
-        eprintln!("Score: {}", fitter.score());
-        eprintln!("Fits: {:?}", fitter.peak_fits);
+        debug!("Score: {}", fitter.score());
+        debug!("Fits: {:?}", fitter.peak_fits);
 
         let expected_fits = MultiPeakShapeFit {
             fits: vec![
                 PeakShape::BiGaussian(BiGaussianPeakShape {
                     mu: 125.46204779366751,
-                    sigma_low: 0.3419458944098784,
-                    sigma_high: 0.945137432308437,
+                    sigma_falling: 0.3419458944098784,
+                    sigma_rising: 0.945137432308437,
                     amplitude: 1277701.0773096785,
                 }),
                 PeakShape::BiGaussian(BiGaussianPeakShape {
                     mu: 108.00971834292885,
-                    sigma_low: 0.09483862559250714,
-                    sigma_high: 0.32453016302695475,
+                    sigma_falling: 0.09483862559250714,
+                    sigma_rising: 0.32453016302695475,
                     amplitude: 487770.8422514298,
                 }),
             ],
@@ -2212,9 +2276,9 @@ mod test {
         );
 
         let mut model = GaussianPeakShape::new(wmt, 1.0, 1.0);
-        let res = model.fit(args.borrow());
-        let score = model.score(&args);
-        eprint!("{model:?}\n{res:?}\n{score}\n");
+        let _res = model.fit(args.borrow());
+        let _score = model.score(&args);
+        // eprint!("{model:?}\n{_res:?}\n{_score}\n");
 
         let mu = 123.44796615442881;
         let sigma = 0.1015352963957489;
@@ -2239,5 +2303,173 @@ mod test {
         //     model.amplitude,
         //     model.amplitude - amplitude
         // );
+    }
+
+    #[rstest::rstest]
+    fn test_mixed_signal() {
+        let time = vec![
+            5., 5.05, 5.1, 5.15, 5.2, 5.25, 5.3, 5.35, 5.4, 5.45, 5.5, 5.55, 5.6, 5.65, 5.7, 5.75,
+            5.8, 5.85, 5.9, 5.95, 6., 6.05, 6.1, 6.15, 6.2, 6.25, 6.3, 6.35, 6.4, 6.45, 6.5, 6.55,
+            6.6, 6.65, 6.7, 6.75, 6.8, 6.85, 6.9, 6.95, 7., 7.05, 7.1, 7.15, 7.2, 7.25, 7.3, 7.35,
+            7.4, 7.45, 7.5, 7.55, 7.6, 7.65, 7.7, 7.75, 7.8, 7.85, 7.9, 7.95, 8., 8.05, 8.1, 8.15,
+            8.2, 8.25, 8.3, 8.35, 8.4, 8.45, 8.5, 8.55, 8.6, 8.65, 8.7, 8.75, 8.8, 8.85, 8.9, 8.95,
+            9., 9.05, 9.1, 9.15, 9.2, 9.25, 9.3, 9.35, 9.4, 9.45, 9.5, 9.55, 9.6, 9.65, 9.7, 9.75,
+            9.8, 9.85, 9.9, 9.95, 10., 10.05, 10.1, 10.15, 10.2, 10.25, 10.3, 10.35, 10.4, 10.45,
+            10.5, 10.55, 10.6, 10.65, 10.7, 10.75, 10.8, 10.85, 10.9, 10.95, 11., 11.05, 11.1,
+            11.15, 11.2, 11.25, 11.3, 11.35, 11.4, 11.45, 11.5, 11.55, 11.6, 11.65, 11.7, 11.75,
+            11.8, 11.85, 11.9, 11.95,
+        ];
+
+        let intensity: Vec<f32> = vec![
+            1.27420451e-10,
+            6.17462536e-10,
+            2.87663017e-09,
+            1.28813560e-08,
+            5.54347499e-08,
+            2.29248641e-07,
+            9.10983876e-07,
+            3.47838473e-06,
+            1.27613560e-05,
+            4.49843188e-05,
+            1.52358163e-04,
+            4.95800813e-04,
+            1.55018440e-03,
+            4.65685268e-03,
+            1.34410596e-02,
+            3.72739646e-02,
+            9.93134748e-02,
+            2.54238248e-01,
+            6.25321648e-01,
+            1.47773227e+00,
+            3.35519458e+00,
+            7.31929673e+00,
+            1.53408987e+01,
+            3.08931557e+01,
+            5.97728698e+01,
+            1.11116052e+02,
+            1.98463694e+02,
+            3.40579046e+02,
+            5.61550473e+02,
+            8.89601967e+02,
+            1.35407175e+03,
+            1.98029962e+03,
+            2.78272124e+03,
+            3.75722702e+03,
+            4.87459147e+03,
+            6.07720155e+03,
+            7.28110184e+03,
+            8.38438277e+03,
+            9.28130702e+03,
+            9.87974971e+03,
+            1.01181592e+04,
+            9.97790016e+03,
+            9.48776976e+03,
+            8.71945410e+03,
+            7.77507793e+03,
+            6.76998890e+03,
+            5.81486954e+03,
+            5.00095885e+03,
+            4.39083710e+03,
+            4.01545364e+03,
+            3.87648735e+03,
+            3.95216934e+03,
+            4.20449848e+03,
+            4.58618917e+03,
+            5.04639622e+03,
+            5.53495197e+03,
+            6.00532094e+03,
+            6.41666569e+03,
+            6.73537620e+03,
+            6.93625265e+03,
+            7.00335463e+03,
+            6.93041211e+03,
+            6.72066330e+03,
+            6.38603273e+03,
+            5.94566001e+03,
+            5.42389927e+03,
+            4.84799871e+03,
+            4.24571927e+03,
+            3.64315240e+03,
+            3.06295366e+03,
+            2.52313467e+03,
+            2.03646669e+03,
+            1.61046411e+03,
+            1.24784786e+03,
+            9.47346984e+02,
+            7.04682299e+02,
+            5.13587560e+02,
+            3.66751988e+02,
+            2.56606294e+02,
+            1.75913423e+02,
+            1.18159189e+02,
+            7.77629758e+01,
+            5.01435513e+01,
+            3.16806551e+01,
+            1.96114662e+01,
+            1.18949556e+01,
+            7.06890964e+00,
+            4.11603334e+00,
+            2.34823840e+00,
+            1.31263002e+00,
+            7.18917952e-01,
+            3.85791959e-01,
+            2.02844792e-01,
+            1.04498823e-01,
+            5.27467595e-02,
+            2.60865722e-02,
+            1.26408156e-02,
+            6.00164112e-03,
+            2.79191246e-03,
+            1.27253700e-03,
+            5.68297684e-04,
+            2.48667027e-04,
+            1.06609858e-04,
+            4.47830199e-05,
+            1.84317357e-05,
+            7.43285977e-06,
+            2.93685491e-06,
+            1.13696185e-06,
+            4.31266912e-07,
+            1.60281439e-07,
+            5.83656297e-08,
+            2.08241826e-08,
+            7.27973551e-09,
+            2.49344667e-09,
+            8.36799506e-10,
+            2.75156384e-10,
+            8.86491588e-11,
+            2.79837874e-11,
+            8.65516222e-12,
+            2.62289424e-12,
+            7.78795072e-13,
+            2.26570027e-13,
+            6.45830522e-14,
+            1.80372998e-14,
+            4.93584288e-15,
+            1.32339040e-15,
+            3.47657399e-16,
+            8.94853257e-17,
+            2.25677892e-17,
+            5.57651734e-18,
+            1.35012489e-18,
+            3.20273997e-19,
+            7.44399825e-20,
+            1.69522634e-20,
+            3.78256125e-21,
+            8.26953508e-22,
+            1.77138542e-22,
+            3.71776457e-23,
+            7.64517712e-24,
+            1.54038778e-24,
+        ];
+
+        let args = PeakFitArgs::from((time, intensity));
+        let split_point = args.locate_extrema(None).unwrap();
+        assert_is_close!(split_point.minimum_time, 7.5, 1e-3, "minimum_height", split_point);
+
+        let mut fitter = SplittingPeakShapeFitter::new(args);
+        fitter.fit_with(FitConfig::default().max_iter(50_000));
+        let score = fitter.score();
+        assert!(score > 0.95, "Expected score {score} to be greater than 0.95");
     }
 }

@@ -6,7 +6,8 @@ use mzsignal::{feature_statistics::{BiGaussianPeakShape, SkewedGaussianPeakShape
 fn bigaussian_fitting(c: &mut Criterion) {
     let features = text::load_feature_table("test/data/features_graph.txt").unwrap();
     let feature = &features[10979];
-    let args = feature.as_peak_shape_args().smooth(1);
+    let args = feature.as_peak_shape_args();
+    let args = args.smooth(1);
 
     let init = BiGaussianPeakShape::guess(&args);
     c.bench_function("bigaussian_reference", |b| {
@@ -21,7 +22,8 @@ fn bigaussian_fitting(c: &mut Criterion) {
 fn skewed_gaussian_fitting(c: &mut Criterion) {
     let features = text::load_feature_table("test/data/features_graph.txt").unwrap();
     let feature = &features[10979];
-    let args = feature.as_peak_shape_args().smooth(1);
+    let args = feature.as_peak_shape_args();
+    let args = args.smooth(1);
 
     let init = SkewedGaussianPeakShape::guess(&args);
     c.bench_function("skewed_gaussian_reference", |b| {
