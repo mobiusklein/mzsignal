@@ -1,4 +1,42 @@
+//! Construct feature maps from peak lists over time.
 //!
+//! The top-level type is [`FeatureExtracter`], or [`DeconvolvedFeatureExtracter`], it's
+//! charge state-aware alternative. These types are parameterized over the time dimension
+//! to work with [`mzpeaks`]'s coordinate system.
+//!
+//! ```rust
+//! # use std::io;
+//! # use mzpeaks::{CentroidPeak, MZPeakSetType, feature::Feature, feature_map::FeatureMap, Time, MZ, Tolerance};
+//! # use mzsignal::text::arrays_over_time_from_file;
+//! use mzsignal::feature_mapping::FeatureExtracter;
+//!
+//! # fn main() -> io::Result<()> {
+//! let time_arrays = arrays_over_time_from_file("test/data/peaks_over_time.txt")?;
+//! let mut time_axis: Vec<f64> = Vec::new();
+//! let mut peak_table: Vec<MZPeakSetType<CentroidPeak>> = Vec::new();
+//!
+//! // Build up the parallel arrays of scan time and peak list
+//! for (time, peaks_of_row) in time_arrays {
+//!     time_axis.push(time);
+//!     let peaks: MZPeakSetType<CentroidPeak> = peaks_of_row
+//!         .mz_array
+//!         .into_iter()
+//!         .zip(peaks_of_row.intensity_array.into_iter())
+//!         .map(|(mz, i)| CentroidPeak::new(*mz, *i, 0))
+//!         .collect();
+//!     peak_table.push(peaks);
+//! }
+//! let mut peak_map_builder = FeatureExtracter::<_, Time>::from_iter(
+//!     time_axis.into_iter().zip(peak_table)
+//! );
+//! let features: FeatureMap<MZ, Time, Feature<MZ, Time>> = peak_map_builder.extract_features(
+//!     Tolerance::PPM(10.0),
+//!     3,
+//!     0.25
+//! );
+//! #   Ok(())
+//! }
+//! ```
 //!
 use std::collections::{HashSet, VecDeque};
 use std::hash::Hash;
@@ -16,248 +54,571 @@ use mzpeaks::{
 
 use crate::search::nearest;
 
-/// Represents a coordinate in a [`PeakMapState`].
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct MapIndex {
-    /// The time index effectively refers to the row in [`PeakMapState::peak_table`]
-    time_index: usize,
-    /// The peak index effectively refers to the column in the `peak_index`-th row in [`PeakMapState::peak_table`]
-    peak_index: usize,
-}
+/// Build graphs of features to bridge gaps in a feature map
+pub mod graph {
+    use super::*;
 
-impl MapIndex {
-    pub fn new(time_index: usize, peak_index: usize) -> Self {
-        Self {
-            time_index,
-            peak_index,
-        }
-    }
-}
-
-
-/// Connects two coordinates in a [`PeakMapState`], carrying some quality
-/// information about the linkage.
-#[derive(Debug, Default, Clone, Copy, PartialEq, PartialOrd)]
-pub struct MapLink {
-    from_index: MapIndex,
-    to_index: MapIndex,
-    mass_error: f64,
-    intensity_weight: f32,
-}
-
-impl Hash for MapLink {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.from_index.hash(state);
-    }
-}
-
-impl MapLink {
-    pub fn new(
-        from_index: MapIndex,
-        to_index: MapIndex,
-        mass_error: f64,
-        intensity_weight: f32,
-    ) -> Self {
-        Self {
-            from_index,
-            to_index,
-            mass_error,
-            intensity_weight,
-        }
-    }
-
-    /// Compute a summary metric of how good of a link this is.
-    ///
-    /// This is used to solve the dynamic programming problem when
-    /// extracting paths.
-    pub fn score(&self) -> f32 {
-        self.intensity_weight * (self.mass_error.powi(4) as f32)
-    }
-}
-
-/// Merge [`FeatureLike`] entities which are within the same mass dimension
-/// error tolerance and within a certain time of one-another by constructing a graph, extracting
-/// connected components, and stitch them together.
-pub trait FeatureGraphBuilder<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone> {
-
-    /// Build the feature graph, where `features` are nodes and edges connect features which
-    /// are close as given by `mass_error_tolerance`, with gap between start/end or end/start
-    /// <= `maximum_gap_size` time units (given by `T`).
-    ///
-    /// The default implementation only filters on the [`mzpeaks::CoordinateLike::coordinate`]
-    /// w.r.t. `D`. If additional constraints are needed, provide a specific implementation.
-    fn build_graph(
-        &self,
-        features: &FeatureMap<D, T, F>,
-        mass_error_tolerance: Tolerance,
-        maximum_gap_size: f64,
-    ) -> Vec<FeatureNode> {
-        let features: FeatureMap<D, T, _> = features
-            .iter()
-            .enumerate()
-            .map(|(i, f)| IndexedFeature::new(f, i))
-            .collect();
-
-        let mut nodes = Vec::with_capacity(features.len());
-
-        for f in features.iter() {
-            if f.is_empty() {
-                continue;
-            }
-            let candidates = features.all_features_for(f.coordinate(), mass_error_tolerance);
-            let mut edges = Vec::new();
-            let start_time = f.start_time().unwrap();
-            let end_time = f.end_time().unwrap();
-            for c in candidates {
-                if f.index == c.index || c.is_empty() {
-                    continue;
-                } else {
-                    let c_start = c.start_time().unwrap();
-                    let c_end = c.end_time().unwrap();
-                    if (start_time - c_end).abs() < maximum_gap_size
-                        || (end_time - c_start).abs() < maximum_gap_size
-                        || f.as_range().overlaps(&c.as_range())
-                    {
-                        edges.push(FeatureLink::new(f.index, c.index));
-                    }
-                }
-            }
-            let node = FeatureNode::new(f.index, edges);
-            nodes.push(node);
-        }
-
-        nodes
-    }
-
-    fn find_connected_components(&self, graph: Vec<FeatureNode>) -> Vec<Vec<usize>> {
-        let mut tarjan = TarjanStronglyConnectedComponents::new(graph);
-        tarjan.solve();
-        tarjan.connected_components
-    }
-
-    fn merge_components(
-        &self,
-        features: &FeatureMap<D, T, F>,
-        connected_components: Vec<Vec<usize>>,
-    ) -> FeatureMap<D, T, F> {
-        let mut merged_nodes = Vec::new();
-        for component_indices in connected_components {
-            if component_indices.is_empty() {
-                continue;
-            }
-            let mut features_of: Vec<_> = component_indices
-                .into_iter()
-                .map(|i| features.get_item(i))
+    /// Merge [`FeatureLike`] entities which are within the same mass dimension
+    /// error tolerance and within a certain time of one-another by constructing a graph, extracting
+    /// connected components, and stitch them together.
+    pub trait FeatureGraphBuilder<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone> {
+        /// Build the feature graph, where `features` are nodes and edges connect features which
+        /// are close as given by `mass_error_tolerance`, with gap between start/end or end/start
+        /// <= `maximum_gap_size` time units (given by `T`).
+        ///
+        /// The default implementation only filters on the [`mzpeaks::CoordinateLike::coordinate`]
+        /// w.r.t. `D`. If additional constraints are needed, provide a specific implementation.
+        fn build_graph(
+            &self,
+            features: &FeatureMap<D, T, F>,
+            mass_error_tolerance: Tolerance,
+            maximum_gap_size: f64,
+        ) -> Vec<FeatureNode> {
+            let features: FeatureMap<D, T, _> = features
+                .iter()
+                .enumerate()
+                .map(|(i, f)| IndexedFeature::new(f, i))
                 .collect();
-            features_of.sort_by(|a, b| a.start_time().unwrap().total_cmp(&b.start_time().unwrap()));
-            let mut acc = (*features_of[0]).clone();
-            for f in &features_of[1..] {
-                for (x, y, z) in f.iter() {
-                    acc.push_raw(*x, *y, *z);
-                }
-            }
-            merged_nodes.push(acc);
-        }
 
-        FeatureMap::new(merged_nodes)
-    }
+            let mut nodes = Vec::with_capacity(features.len());
 
-    fn bridge_feature_gaps(
-        &self,
-        features: &FeatureMap<D, T, F>,
-        mass_error_tolerance: Tolerance,
-        maximum_gap_size: f64,
-    ) -> FeatureMap<D, T, F> {
-        let graph = self.build_graph(features, mass_error_tolerance, maximum_gap_size);
-        let components = self.find_connected_components(graph);
-        self.merge_components(features, components)
-    }
-}
-
-/// A trivial implementation of [`FeatureGraphBuilder`] using its default implementation
-#[derive(Debug, Default, Clone)]
-pub struct FeatureMerger<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone> {
-    _d: PhantomData<D>,
-    _t: PhantomData<T>,
-    _f: PhantomData<F>,
-}
-
-impl<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone> FeatureGraphBuilder<D, T, F>
-    for FeatureMerger<D, T, F>
-{
-}
-
-/// An implementation of [`FeatureGraphBuilder`] that only permits edges between
-/// nodes which have equal charge states
-#[derive(Debug, Default, Clone)]
-pub struct ChargeAwareFeatureMerger<
-    D,
-    T,
-    F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone + KnownCharge,
-> {
-    _d: PhantomData<D>,
-    _t: PhantomData<T>,
-    _f: PhantomData<F>,
-}
-
-impl<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone + KnownCharge>
-    FeatureGraphBuilder<D, T, F> for ChargeAwareFeatureMerger<D, T, F>
-{
-    /// This is identical to the default implementation save that
-    /// it enforces the limitation on charge state matches.
-    fn build_graph(
-        &self,
-        features: &FeatureMap<D, T, F>,
-        mass_error_tolerance: Tolerance,
-        maximum_gap_size: f64,
-    ) -> Vec<FeatureNode> {
-        let features: FeatureMap<D, T, _> = features
-            .iter()
-            .enumerate()
-            .map(|(i, f)| IndexedFeature::new(f, i))
-            .collect();
-
-        let mut nodes = Vec::with_capacity(features.len());
-
-        for f in features.iter() {
-            if f.is_empty() {
-                continue;
-            }
-            let z = f.feature.charge();
-            let candidates = features.all_features_for(f.coordinate(), mass_error_tolerance);
-            let mut edges = Vec::new();
-            let start_time = f.start_time().unwrap();
-            let end_time = f.end_time().unwrap();
-            for c in candidates {
-                if f.index == c.index || c.is_empty() || c.feature.charge() != z {
+            for f in features.iter() {
+                if f.is_empty() {
                     continue;
-                } else {
-                    let c_start = c.start_time().unwrap();
-                    let c_end = c.end_time().unwrap();
-                    if (start_time - c_end).abs() < maximum_gap_size
-                        || (end_time - c_start).abs() < maximum_gap_size
-                        || f.as_range().overlaps(&c.as_range())
-                    {
-                        edges.push(FeatureLink::new(f.index, c.index));
+                }
+                let candidates = features.all_features_for(f.coordinate(), mass_error_tolerance);
+                let mut edges = Vec::new();
+                let start_time = f.start_time().unwrap();
+                let end_time = f.end_time().unwrap();
+                for c in candidates {
+                    if f.index == c.index || c.is_empty() {
+                        continue;
+                    } else {
+                        let c_start = c.start_time().unwrap();
+                        let c_end = c.end_time().unwrap();
+                        if (start_time - c_end).abs() < maximum_gap_size
+                            || (end_time - c_start).abs() < maximum_gap_size
+                            || f.as_range().overlaps(&c.as_range())
+                        {
+                            edges.push(FeatureLink::new(f.index, c.index));
+                        }
                     }
                 }
+                let node = FeatureNode::new(f.index, edges);
+                nodes.push(node);
             }
-            let node = FeatureNode::new(f.index, edges);
-            nodes.push(node);
+
+            nodes
         }
 
-        nodes
+        fn find_connected_components(&self, graph: Vec<FeatureNode>) -> Vec<Vec<usize>> {
+            let mut tarjan = TarjanStronglyConnectedComponents::new(graph);
+            tarjan.solve();
+            tarjan.connected_components
+        }
+
+        fn merge_components(
+            &self,
+            features: &FeatureMap<D, T, F>,
+            connected_components: Vec<Vec<usize>>,
+        ) -> FeatureMap<D, T, F> {
+            let mut merged_nodes = Vec::new();
+            for component_indices in connected_components {
+                if component_indices.is_empty() {
+                    continue;
+                }
+                let mut features_of: Vec<_> = component_indices
+                    .into_iter()
+                    .map(|i| features.get_item(i))
+                    .collect();
+                features_of
+                    .sort_by(|a, b| a.start_time().unwrap().total_cmp(&b.start_time().unwrap()));
+                let mut acc = (*features_of[0]).clone();
+                for f in &features_of[1..] {
+                    for (x, y, z) in f.iter() {
+                        acc.push_raw(*x, *y, *z);
+                    }
+                }
+                merged_nodes.push(acc);
+            }
+
+            FeatureMap::new(merged_nodes)
+        }
+
+        fn bridge_feature_gaps(
+            &self,
+            features: &FeatureMap<D, T, F>,
+            mass_error_tolerance: Tolerance,
+            maximum_gap_size: f64,
+        ) -> FeatureMap<D, T, F> {
+            let graph = self.build_graph(features, mass_error_tolerance, maximum_gap_size);
+            let components = self.find_connected_components(graph);
+            self.merge_components(features, components)
+        }
+    }
+
+    /// A trivial implementation of [`FeatureGraphBuilder`] using its default implementation
+    #[derive(Debug, Default, Clone)]
+    pub struct FeatureMerger<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone> {
+        _d: PhantomData<D>,
+        _t: PhantomData<T>,
+        _f: PhantomData<F>,
+    }
+
+    impl<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone> FeatureGraphBuilder<D, T, F>
+        for FeatureMerger<D, T, F>
+    {
+    }
+
+    /// An implementation of [`FeatureGraphBuilder`] that only permits edges between
+    /// nodes which have equal charge states
+    #[derive(Debug, Default, Clone)]
+    pub struct ChargeAwareFeatureMerger<
+        D,
+        T,
+        F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone + KnownCharge,
+    > {
+        _d: PhantomData<D>,
+        _t: PhantomData<T>,
+        _f: PhantomData<F>,
+    }
+
+    /// The core functionality of [`ChargeAwareFeatureMerger`] is in its non-default
+    /// [`FeatureGraphBuilder`] implementation.
+    impl<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone + KnownCharge>
+        FeatureGraphBuilder<D, T, F> for ChargeAwareFeatureMerger<D, T, F>
+    {
+        /// This is identical to the default implementation save that
+        /// it enforces the limitation on charge state matches.
+        fn build_graph(
+            &self,
+            features: &FeatureMap<D, T, F>,
+            mass_error_tolerance: Tolerance,
+            maximum_gap_size: f64,
+        ) -> Vec<FeatureNode> {
+            let features: FeatureMap<D, T, _> = features
+                .iter()
+                .enumerate()
+                .map(|(i, f)| IndexedFeature::new(f, i))
+                .collect();
+
+            let mut nodes = Vec::with_capacity(features.len());
+
+            for f in features.iter() {
+                if f.is_empty() {
+                    continue;
+                }
+                let z = f.feature.charge();
+                let candidates = features.all_features_for(f.coordinate(), mass_error_tolerance);
+                let mut edges = Vec::new();
+                let start_time = f.start_time().unwrap();
+                let end_time = f.end_time().unwrap();
+                for c in candidates {
+                    if f.index == c.index || c.is_empty() || c.feature.charge() != z {
+                        continue;
+                    } else {
+                        let c_start = c.start_time().unwrap();
+                        let c_end = c.end_time().unwrap();
+                        if (start_time - c_end).abs() < maximum_gap_size
+                            || (end_time - c_start).abs() < maximum_gap_size
+                            || f.as_range().overlaps(&c.as_range())
+                        {
+                            edges.push(FeatureLink::new(f.index, c.index));
+                        }
+                    }
+                }
+                let node = FeatureNode::new(f.index, edges);
+                nodes.push(node);
+            }
+
+            nodes
+        }
+    }
+
+    /// A node in a graph representing a feature stored in some other collection
+    /// that holds extra state for [`TarjanStronglyConnectedComponents`].
+    #[derive(Debug, Default, Clone)]
+    pub struct FeatureNode {
+        /// The location in the external collection where the feature this node represents
+        /// resides.
+        pub feature_index: usize,
+        /// The indices of the related features in the external collection which this feature
+        /// connects to.
+        pub edges: Vec<FeatureLink>,
+        /// The stack index produced by Tarjan's strongly connected component.
+        index: Option<usize>,
+        /// The putative root index for the current connected component while this
+        /// node was on the stack.
+        low_link: Option<usize>,
+        /// Whether or not this node is still on the stack.
+        on_stack: bool,
+    }
+
+    impl FeatureNode {
+        pub fn new(feature_index: usize, edges: Vec<FeatureLink>) -> Self {
+            Self {
+                feature_index,
+                edges,
+                ..Default::default()
+            }
+        }
+    }
+
+    /// Describes a relationship between two features in some collection
+    /// with static indices.
+    #[derive(Debug, Default, Clone, Copy)]
+    pub struct FeatureLink {
+        pub from_index: usize,
+        pub to_index: usize,
+    }
+
+    impl FeatureLink {
+        pub fn new(from_index: usize, to_index: usize) -> Self {
+            Self {
+                from_index,
+                to_index,
+            }
+        }
+    }
+
+    /// An implementation of Tarjan's strongly connected components algorithm.
+    ///
+    /// The main goal is to identify all connected components of the graph which
+    /// represent segments of what could be the same feature. The manner of the
+    /// graph's construction may influence how truly related those segments are.
+    ///
+    /// Once connected components are identified, some other algorithm may take
+    /// care of merging them applying whatever criteria they consider necessary.
+    ///
+    /// Graph nodes are represented by `usize` values, corresponding to [`FeatureNode::feature_index`]
+    /// and as such components are just [`Vec<usize>`].
+    ///
+    /// # See also:
+    /// This is a near direct translation of the pseudocode from [Wikipedia](https://en.wikipedia.org/wiki/Tarjan%27s_strongly_connected_components_algorithm)
+    #[derive(Debug, Default)]
+    pub struct TarjanStronglyConnectedComponents {
+        nodes: Vec<FeatureNode>,
+        current_component: Vec<usize>,
+        connected_components: Vec<Vec<usize>>,
+        index: usize,
+    }
+
+    impl TarjanStronglyConnectedComponents {
+        pub fn new(nodes: Vec<FeatureNode>) -> Self {
+            Self {
+                nodes,
+                ..Default::default()
+            }
+        }
+
+        fn visit_node_set_index(&mut self, node_index: usize) {
+            let node = self.nodes.get_mut(node_index).unwrap();
+            node.index = Some(self.index);
+            node.low_link = Some(self.index);
+            node.on_stack = true;
+            self.index += 1;
+        }
+
+        fn index_is_visited(&self, node_index: usize) -> bool {
+            self.nodes.get(node_index).unwrap().index.is_some()
+        }
+
+        fn edges_of(&self, node_index: usize) -> Vec<usize> {
+            self.nodes
+                .get(node_index)
+                .unwrap()
+                .edges
+                .iter()
+                .map(|e| e.to_index)
+                .collect()
+        }
+
+        /// Identify all connected components iteratively.
+        pub fn solve(&mut self) {
+            let mut stack = Vec::new();
+
+            for i in 0..self.nodes.len() {
+                if !self.index_is_visited(i) {
+                    self.strong_connect(i, &mut stack)
+                }
+            }
+        }
+
+        fn node_mut(&'_ mut self, node_index: usize) -> &'_ mut FeatureNode {
+            self.nodes.get_mut(node_index).unwrap()
+        }
+
+        fn node(&self, node_index: usize) -> &FeatureNode {
+            self.nodes.get(node_index).unwrap()
+        }
+
+        /// Iterate over the connected components of the graph. This will
+        /// be an empty iterator if [`TarjanStronglyConnectedComponents::solve`]
+        /// has not been called yet.
+        pub fn iter(&self) -> std::slice::Iter<Vec<usize>> {
+            self.connected_components.iter()
+        }
+
+        fn consume_stack_until(&mut self, node_index: usize, stack: &mut Vec<usize>) {
+            while let Some(w) = stack.pop() {
+                if w != node_index {
+                    self.node_mut(w).on_stack = false;
+                    self.current_component.push(w);
+                } else {
+                    // stack.push(w);
+                    self.node_mut(w).on_stack = false;
+                    self.current_component.push(w);
+                    break;
+                }
+            }
+            self.connected_components
+                .push(mem::take(&mut self.current_component));
+        }
+
+        fn strong_connect(&mut self, node_index: usize, stack: &mut Vec<usize>) {
+            self.visit_node_set_index(node_index);
+            stack.push(node_index);
+
+            for w in self.edges_of(node_index) {
+                if !self.index_is_visited(w) {
+                    self.strong_connect(w, stack);
+                    self.node_mut(node_index).low_link = Some(
+                        self.node(w)
+                            .low_link
+                            .unwrap()
+                            .min(self.node(node_index).low_link.unwrap()),
+                    );
+                } else if self.node(w).on_stack {
+                    self.node_mut(node_index).low_link = Some(
+                        self.node(w)
+                            .index
+                            .unwrap()
+                            .min(self.node(node_index).low_link.unwrap()),
+                    );
+                }
+            }
+
+            if self.node(node_index).low_link == self.node(node_index).index {
+                self.consume_stack_until(node_index, stack);
+            }
+        }
+    }
+
+    impl IntoIterator for TarjanStronglyConnectedComponents {
+        type Item = Vec<usize>;
+
+        type IntoIter = std::vec::IntoIter<Vec<usize>>;
+
+        fn into_iter(self) -> Self::IntoIter {
+            self.connected_components.into_iter()
+        }
+    }
+
+    // An implementation detail, [`mzpeaks::feature_map`] doesn't always have an
+    // index-yielding search method, and [`FeatureLike`] types
+    // do not carry their sort index around with them, so this defines a wrapper
+    // type that provides the same API, but also carries around an index. Should
+    // not really be needed outside this module.
+    mod index_impl {
+        use super::*;
+
+        /// Wrap a [`FeatureLike`] type `F` with a known index for
+        /// ease of reference
+        #[derive(Debug)]
+        pub struct IndexedFeature<'a, D, T, F: FeatureLike<D, T>> {
+            /// Some [`FeatureLike`] type we want to build a graph over
+            pub feature: &'a F,
+            /// The index of `feature` to use as a key
+            pub index: usize,
+            _d: PhantomData<D>,
+            _t: PhantomData<T>,
+        }
+
+        impl<'a, D, T, F: FeatureLike<D, T>> IndexedFeature<'a, D, T, F> {
+            pub fn new(feature: &'a F, index: usize) -> Self {
+                Self {
+                    feature,
+                    index,
+                    _d: PhantomData,
+                    _t: PhantomData,
+                }
+            }
+        }
+
+        impl<
+                'a,
+                D: std::ops::Deref,
+                T: std::ops::Deref,
+                F: FeatureLike<D, T> + std::ops::Deref,
+            > std::ops::Deref for IndexedFeature<'a, D, T, F>
+        {
+            type Target = &'a F;
+
+            fn deref(&self) -> &Self::Target {
+                &self.feature
+            }
+        }
+
+        impl<'a, D, T, F: FeatureLike<D, T>> TimeInterval<T> for IndexedFeature<'a, D, T, F> {
+            fn start_time(&self) -> Option<f64> {
+                self.feature.start_time()
+            }
+
+            fn end_time(&self) -> Option<f64> {
+                self.feature.end_time()
+            }
+
+            fn apex_time(&self) -> Option<f64> {
+                self.feature.apex_time()
+            }
+
+            fn area(&self) -> f32 {
+                self.feature.area()
+            }
+
+            fn iter_time(&self) -> impl Iterator<Item = f64> {
+                self.feature.iter_time()
+            }
+        }
+
+        impl<'a, D, T, F: FeatureLike<D, T>> PartialEq for IndexedFeature<'a, D, T, F> {
+            fn eq(&self, other: &Self) -> bool {
+                self.feature == other.feature && self.index == other.index
+            }
+        }
+
+        impl<'a, D, T, F: FeatureLike<D, T>> PartialOrd for IndexedFeature<'a, D, T, F> {
+            fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+                self.feature.partial_cmp(&other.feature)
+            }
+        }
+
+        impl<'a, D, T, F: FeatureLike<D, T>> CoordinateLike<D> for IndexedFeature<'a, D, T, F> {
+            fn coordinate(&self) -> f64 {
+                self.feature.coordinate()
+            }
+        }
+
+        impl<'a, D, T, F: FeatureLike<D, T>> IntensityMeasurement for IndexedFeature<'a, D, T, F> {
+            fn intensity(&self) -> f32 {
+                self.feature.intensity()
+            }
+        }
+
+        impl<'a, D, T, F: FeatureLike<D, T>> FeatureLike<D, T> for IndexedFeature<'a, D, T, F> {
+            fn len(&self) -> usize {
+                self.feature.len()
+            }
+
+            fn iter(&self) -> impl Iterator<Item = (&f64, &f64, &f32)> {
+                self.feature.iter()
+            }
+        }
+    }
+
+    use index_impl::IndexedFeature;
+}
+
+/// Helper types for representing coordinates over a [`MapState`]
+pub mod map {
+    use super::*;
+    /// Represents a coordinate in a [`PeakMapState`], referencing a specific peak
+    /// at a specific time.
+    #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    pub struct MapIndex {
+        /// The time index effectively refers to the row in [`PeakMapState::peak_table`]
+        pub time_index: usize,
+        /// The peak index effectively refers to the column in the `peak_index`-th row in [`PeakMapState::peak_table`]
+        pub peak_index: usize,
+    }
+
+    impl MapIndex {
+        pub fn new(time_index: usize, peak_index: usize) -> Self {
+            Self {
+                time_index,
+                peak_index,
+            }
+        }
+    }
+
+    /// Connects two coordinates in a [`PeakMapState`], carrying some quality
+    /// information about the linkage.
+    #[derive(Debug, Default, Clone, Copy, PartialEq, PartialOrd)]
+    pub struct MapLink {
+        pub from_index: MapIndex,
+        pub to_index: MapIndex,
+        pub mass_error: f64,
+        pub intensity_weight: f32,
+    }
+
+    impl Hash for MapLink {
+        fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+            self.from_index.hash(state);
+        }
+    }
+
+    impl MapLink {
+        pub fn new(
+            from_index: MapIndex,
+            to_index: MapIndex,
+            mass_error: f64,
+            intensity_weight: f32,
+        ) -> Self {
+            Self {
+                from_index,
+                to_index,
+                mass_error,
+                intensity_weight,
+            }
+        }
+
+        /// Compute a summary metric of how good of a link this is.
+        ///
+        /// This is used to solve the dynamic programming problem when
+        /// extracting paths.
+        pub fn score(&self) -> f32 {
+            self.intensity_weight * (self.mass_error.powi(4) as f32)
+        }
     }
 }
 
+use graph::*;
+use map::*;
 
 /// A sparse, immutable matrix of peaks over time, the default [`MapState`] implementation.
-#[derive(Default, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct PeakMapState<C: IndexedCoordinate<D> + IntensityMeasurement, D> {
     /// A mapping from row index to time coordinate given by some external dimension `T`
     pub time_axis: Vec<f64>,
     /// The peaks of type `C` on coordinate system `D` at each time point
     pub peak_table: Vec<PeakSetVec<C, D>>,
+}
+
+impl<C: IndexedCoordinate<D> + IntensityMeasurement, D> Default for PeakMapState<C, D> {
+    fn default() -> Self {
+        Self {
+            time_axis: Vec::new(),
+            peak_table: Vec::new(),
+        }
+    }
+}
+
+/// A [`PeakMapState`] can be built from an iterator, but it expects the iterator to be sorted over the time dimension, and
+/// will panic if it encounters a non-monotonic sequence.
+impl<C: IndexedCoordinate<D> + IntensityMeasurement, D> FromIterator<(f64, PeakSetVec<C, D>)>
+    for PeakMapState<C, D>
+{
+    fn from_iter<T: IntoIterator<Item = (f64, PeakSetVec<C, D>)>>(iter: T) -> Self {
+        let mut this = Self::default();
+        let mut last_time = f64::NEG_INFINITY;
+        for (time, peaks) in iter {
+            assert!(time > last_time);
+            last_time = time;
+            this.time_axis.push(time);
+            this.peak_table.push(peaks);
+        }
+        this
+    }
 }
 
 impl<D, C: IndexedCoordinate<D> + IntensityMeasurement> PeakMapState<C, D> {
@@ -421,13 +782,23 @@ impl<
     }
 }
 
-
 /// A [`MapState`] implementation that restricts peak matches to only those which have
 /// the same charge state.
-#[derive(Default, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct ChargedPeakMapState<C: IndexedCoordinate<D> + IntensityMeasurement + KnownCharge, D> {
     pub time_axis: Vec<f64>,
     pub peak_table: Vec<PeakSetVec<C, D>>,
+}
+
+impl<C: IndexedCoordinate<D> + IntensityMeasurement + KnownCharge, D> Default
+    for ChargedPeakMapState<C, D>
+{
+    fn default() -> Self {
+        Self {
+            time_axis: Vec::new(),
+            peak_table: Vec::new(),
+        }
+    }
 }
 
 impl<
@@ -493,6 +864,23 @@ impl<C: IndexedCoordinate<D> + IntensityMeasurement + KnownCharge, D> ChargedPea
     }
 }
 
+/// A [`ChargedPeakMapState`] can be built from an iterator, but it expects the iterator to be sorted over the time dimension, and
+/// will panic if it encounters a non-monotonic sequence.
+impl<C: IndexedCoordinate<D> + IntensityMeasurement + KnownCharge, D>
+    FromIterator<(f64, PeakSetVec<C, D>)> for ChargedPeakMapState<C, D>
+{
+    fn from_iter<T: IntoIterator<Item = (f64, PeakSetVec<C, D>)>>(iter: T) -> Self {
+        let mut this = Self::default();
+        let mut last_time = f64::NEG_INFINITY;
+        for (time, peaks) in iter {
+            assert!(time > last_time);
+            last_time = time;
+            this.time_axis.push(time);
+            this.peak_table.push(peaks);
+        }
+        this
+    }
+}
 
 /// Represents a sequence of [`MapLink`] entries with a dynamic programming
 /// score.
@@ -556,8 +944,8 @@ impl MapPath {
     }
 }
 
-pub type MapCell = Vec<MapLink>;
-pub type MapCells = Vec<MapCell>;
+type MapCell = Vec<MapLink>;
+type MapCells = Vec<MapCell>;
 
 /// Extracts features from a [`MapState`] type using dynamic programming.
 #[derive(Debug, Clone)]
@@ -592,6 +980,11 @@ impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
         paths.resize_with(state.len(), MapCells::new);
 
         Self::init(state, paths)
+    }
+
+    /// Get a reference to the enclosed [`MapState`]
+    pub fn inner(&self) -> &S {
+        &self.state
     }
 
     /// Drop associated dynamic programming table and retrieve the enclosed [`MapState`]
@@ -741,290 +1134,20 @@ impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement + 'sta
     }
 }
 
+/// The basic form of [`FeatureExtracterType`]
 pub type FeatureExtracter<C, T> = FeatureExtracterType<PeakMapState<C, MZ>, C, MZ, T>;
+/// A [`FeatureExtracter`] over retention time
 pub type LCMSMapExtracter<C> = FeatureExtracter<C, Time>;
+/// A [`FeatureExtracter`] over drift time
 pub type IMMSMapExtracter<C> = FeatureExtracter<C, IonMobility>;
 
+/// A charge-aware form of [`FeatureExtracterType`]
 pub type DeconvolvedFeatureExtracter<C, T> =
     FeatureExtracterType<ChargedPeakMapState<C, Mass>, C, Mass, T>;
+/// A [`DeconvolvedFeatureExtracter`] over retention time
 pub type DeconvolvedLCMSMapExtracter<C> = DeconvolvedFeatureExtracter<C, Time>;
+/// A [`DeconvolvedFeatureExtracter`] over drift time
 pub type DeconvolvedIMMSMapExtracter<C> = DeconvolvedFeatureExtracter<C, IonMobility>;
-
-
-/// A node in a graph representing a feature stored in some other collection
-/// that holds extra state for [`TarjanStronglyConnectedComponents`].
-#[derive(Debug, Default, Clone)]
-pub struct FeatureNode {
-    /// The location in the external collection where the feature this node represents
-    /// resides.
-    pub feature_index: usize,
-    /// The indices of the related features in the external collection which this feature
-    /// connects to.
-    pub edges: Vec<FeatureLink>,
-    /// The stack index produced by Tarjan's strongly connected component.
-    index: Option<usize>,
-    /// The putative root index for the current connected component while this
-    /// node was on the stack.
-    low_link: Option<usize>,
-    /// Whether or not this node is still on the stack.
-    on_stack: bool,
-}
-
-impl FeatureNode {
-    pub fn new(feature_index: usize, edges: Vec<FeatureLink>) -> Self {
-        Self {
-            feature_index,
-            edges,
-            ..Default::default()
-        }
-    }
-}
-
-/// Describes a relationship between two features in some collection
-/// with static indices.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct FeatureLink {
-    pub from_index: usize,
-    pub to_index: usize,
-}
-
-impl FeatureLink {
-    pub fn new(from_index: usize, to_index: usize) -> Self {
-        Self {
-            from_index,
-            to_index,
-        }
-    }
-}
-
-/// An implementation of Tarjan's strongly connected components algorithm.
-///
-/// The main goal is to identify all connected components of the graph which
-/// represent segments of what could be the same feature. The manner of the
-/// graph's construction may influence how truly related those segments are.
-///
-/// Once connected components are identified, some other algorithm may take
-/// care of merging them applying whatever criteria they consider necessary.
-///
-/// Graph nodes are represented by `usize` values, corresponding to [`FeatureNode::feature_index`]
-/// and as such components are just [`Vec<usize>`].
-///
-/// # See also:
-/// This is a near direct translation of the pseudocode from [Wikipedia](https://en.wikipedia.org/wiki/Tarjan%27s_strongly_connected_components_algorithm)
-#[derive(Debug, Default)]
-pub struct TarjanStronglyConnectedComponents {
-    nodes: Vec<FeatureNode>,
-    current_component: Vec<usize>,
-    connected_components: Vec<Vec<usize>>,
-    index: usize,
-}
-
-impl TarjanStronglyConnectedComponents {
-    pub fn new(nodes: Vec<FeatureNode>) -> Self {
-        Self {
-            nodes,
-            ..Default::default()
-        }
-    }
-
-    fn visit_node_set_index(&mut self, node_index: usize) {
-        let node = self.nodes.get_mut(node_index).unwrap();
-        node.index = Some(self.index);
-        node.low_link = Some(self.index);
-        node.on_stack = true;
-        self.index += 1;
-    }
-
-    fn index_is_visited(&self, node_index: usize) -> bool {
-        self.nodes.get(node_index).unwrap().index.is_some()
-    }
-
-    fn edges_of(&self, node_index: usize) -> Vec<usize> {
-        self.nodes
-            .get(node_index)
-            .unwrap()
-            .edges
-            .iter()
-            .map(|e| e.to_index)
-            .collect()
-    }
-
-    /// Identify all connected components iteratively.
-    pub fn solve(&mut self) {
-        let mut stack = Vec::new();
-
-        for i in 0..self.nodes.len() {
-            if !self.index_is_visited(i) {
-                self.strong_connect(i, &mut stack)
-            }
-        }
-    }
-
-    fn node_mut(&'_ mut self, node_index: usize) -> &'_ mut FeatureNode {
-        self.nodes.get_mut(node_index).unwrap()
-    }
-
-    fn node(&self, node_index: usize) -> &FeatureNode {
-        self.nodes.get(node_index).unwrap()
-    }
-
-    /// Iterate over the connected components of the graph. This will
-    /// be an empty iterator if [`TarjanStronglyConnectedComponents::solve`]
-    /// has not been called yet.
-    pub fn iter(&self) -> std::slice::Iter<Vec<usize>> {
-        self.connected_components.iter()
-    }
-
-    fn consume_stack_until(&mut self, node_index: usize, stack: &mut Vec<usize>) {
-        while let Some(w) = stack.pop() {
-            if w != node_index {
-                self.node_mut(w).on_stack = false;
-                self.current_component.push(w);
-            } else {
-                // stack.push(w);
-                self.node_mut(w).on_stack = false;
-                self.current_component.push(w);
-                break;
-            }
-        }
-        self.connected_components
-            .push(mem::take(&mut self.current_component));
-    }
-
-    fn strong_connect(&mut self, node_index: usize, stack: &mut Vec<usize>) {
-        self.visit_node_set_index(node_index);
-        stack.push(node_index);
-
-        for w in self.edges_of(node_index) {
-            if !self.index_is_visited(w) {
-                self.strong_connect(w, stack);
-                self.node_mut(node_index).low_link = Some(
-                    self.node(w)
-                        .low_link
-                        .unwrap()
-                        .min(self.node(node_index).low_link.unwrap()),
-                );
-            } else if self.node(w).on_stack {
-                self.node_mut(node_index).low_link = Some(
-                    self.node(w)
-                        .index
-                        .unwrap()
-                        .min(self.node(node_index).low_link.unwrap()),
-                );
-            }
-        }
-
-        if self.node(node_index).low_link == self.node(node_index).index {
-            self.consume_stack_until(node_index, stack);
-        }
-    }
-}
-
-impl IntoIterator for TarjanStronglyConnectedComponents {
-    type Item = Vec<usize>;
-
-    type IntoIter = std::vec::IntoIter<Vec<usize>>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.connected_components.into_iter()
-    }
-}
-
-// An implementation detail, [`mzpeaks::feature_map`] doesn't always have an
-// index-yielding search method, and [`FeatureLike`] types
-// do not carry their sort index around with them, so this defines a wrapper
-// type that provides the same API, but also carries around an index. Should
-// not really be needed outside this module.
-mod index_impl {
-    use super::*;
-
-    #[derive(Debug)]
-    pub struct IndexedFeature<'a, D, T, F: FeatureLike<D, T>> {
-        pub feature: &'a F,
-        pub index: usize,
-        _d: PhantomData<D>,
-        _t: PhantomData<T>,
-    }
-
-    impl<'a, D, T, F: FeatureLike<D, T>> IndexedFeature<'a, D, T, F> {
-        pub fn new(feature: &'a F, index: usize) -> Self {
-            Self {
-                feature,
-                index,
-                _d: PhantomData,
-                _t: PhantomData,
-            }
-        }
-    }
-
-    impl<'a, D: std::ops::Deref, T: std::ops::Deref, F: FeatureLike<D, T> + std::ops::Deref>
-        std::ops::Deref for IndexedFeature<'a, D, T, F>
-    {
-        type Target = &'a F;
-
-        fn deref(&self) -> &Self::Target {
-            &self.feature
-        }
-    }
-
-    impl<'a, D, T, F: FeatureLike<D, T>> TimeInterval<T> for IndexedFeature<'a, D, T, F> {
-        fn start_time(&self) -> Option<f64> {
-            self.feature.start_time()
-        }
-
-        fn end_time(&self) -> Option<f64> {
-            self.feature.end_time()
-        }
-
-        fn apex_time(&self) -> Option<f64> {
-            self.feature.apex_time()
-        }
-
-        fn area(&self) -> f32 {
-            self.feature.area()
-        }
-
-        fn iter_time(&self) -> impl Iterator<Item = f64> {
-            self.feature.iter_time()
-        }
-    }
-
-    impl<'a, D, T, F: FeatureLike<D, T>> PartialEq for IndexedFeature<'a, D, T, F> {
-        fn eq(&self, other: &Self) -> bool {
-            self.feature == other.feature && self.index == other.index
-        }
-    }
-
-    impl<'a, D, T, F: FeatureLike<D, T>> PartialOrd for IndexedFeature<'a, D, T, F> {
-        fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-            self.feature.partial_cmp(&other.feature)
-        }
-    }
-
-    impl<'a, D, T, F: FeatureLike<D, T>> CoordinateLike<D> for IndexedFeature<'a, D, T, F> {
-        fn coordinate(&self) -> f64 {
-            self.feature.coordinate()
-        }
-    }
-
-    impl<'a, D, T, F: FeatureLike<D, T>> IntensityMeasurement for IndexedFeature<'a, D, T, F> {
-        fn intensity(&self) -> f32 {
-            self.feature.intensity()
-        }
-    }
-
-    impl<'a, D, T, F: FeatureLike<D, T>> FeatureLike<D, T> for IndexedFeature<'a, D, T, F> {
-        fn len(&self) -> usize {
-            self.feature.len()
-        }
-
-        fn iter(&self) -> impl Iterator<Item = (&f64, &f64, &f32)> {
-            self.feature.iter()
-        }
-    }
-}
-
-use index_impl::IndexedFeature;
 
 #[cfg(test)]
 mod test {
@@ -1055,8 +1178,7 @@ mod test {
             peak_table.push(peaks);
         }
 
-        let peak_map_state = PeakMapState::new(time_axis, peak_table);
-        let mut peak_map_builder = FeatureExtracter::<_, Time>::new(peak_map_state);
+        let mut peak_map_builder = FeatureExtracter::<_, Time>::from_iter(time_axis.into_iter().zip(peak_table));
         let features = peak_map_builder.extract_features(Tolerance::PPM(10.0), 3, 0.25);
 
         if false {
