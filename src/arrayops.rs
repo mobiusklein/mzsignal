@@ -44,8 +44,7 @@ pub fn trapz<
 ) -> B {
     let half = B::from(0.5).unwrap();
     let n = x.len();
-    assert!(x.len() < n - 2);
-    assert!(y.len() < n - 2);
+    assert_eq!(y.len(), n);
     (0..n - 2)
         .map(|i| {
             let delta = x[i + 1] - x[i];

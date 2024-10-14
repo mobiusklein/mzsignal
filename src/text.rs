@@ -116,6 +116,39 @@ pub fn arrays_over_time_from_file<'a, P: AsRef<path::Path>>(path: P) -> io::Resu
 }
 
 
+pub fn load_feature_table<P: AsRef<path::Path>>(path: P) -> io::Result<Vec<mzpeaks::feature::Feature<mzpeaks::MZ, mzpeaks::Time>>> {
+    let fh = io::BufReader::new(fs::File::open(path)?);
+
+    let mut features: Vec<mzpeaks::feature::Feature<mzpeaks::MZ, mzpeaks::Time>> = Vec::new();
+    let mut feature: mzpeaks::feature::Feature<mzpeaks::MZ, mzpeaks::Time> =
+        mzpeaks::feature::Feature::empty();
+    let mut last_id = 0;
+    for (_i, line) in fh.lines().enumerate().skip(1) {
+        let line_raw = line?;
+        let line = line_raw.trim();
+        if line.is_empty() {
+            continue;
+        }
+        // eprintln!("{i}: {line}");
+        let mut tokenizer = line.split("\t");
+
+        let feat_id = tokenizer.next().map(|s| s.parse::<i32>().unwrap()).unwrap();
+        let mz = tokenizer.next().map(|s| s.parse::<f64>().unwrap()).unwrap();
+        let rt = tokenizer.next().map(|s| s.parse::<f64>().unwrap()).unwrap();
+        let inten = tokenizer.next().map(|s| s.parse::<f32>().unwrap()).unwrap();
+
+        if feat_id != last_id {
+            features.push(feature);
+            feature = Default::default();
+            last_id = feat_id;
+        }
+        feature.push_raw(mz, rt, inten);
+    }
+    features.push(feature);
+    Ok(features)
+}
+
+
 #[cfg(test)]
 mod test {
     use super::*;

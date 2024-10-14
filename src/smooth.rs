@@ -23,7 +23,7 @@ impl<F: Float + AddAssign, const N: usize> Default for RingBuffer<F, N> {
 impl<F: Float + AddAssign, const N: usize> RingBuffer<F, N> {
     pub fn new() -> Self {
         let mut buffer = VecDeque::new();
-        buffer.extend([0.0; N].into_iter().map(|f| F::from(f).unwrap()));
+        buffer.extend([F::zero(); N]);
         Self { buffer }
     }
 
@@ -87,7 +87,8 @@ impl<F: Float + AddAssign + SubAssign, const N: usize> MovingAverage<F, N> {
     /// Average the signal in `data` into `destination` with window size `N`
     pub fn average_into(data: &[F], destination: &mut [F]) {
         let state = Self::new();
-        let it = state.average_over(data.iter().copied());
+        let it = data.iter().copied();
+        let it = state.average_over(it).skip(N / 2);
         it.zip(destination.iter_mut()).for_each(|(a, d)| *d = a);
     }
 

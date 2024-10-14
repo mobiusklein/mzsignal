@@ -695,7 +695,12 @@ impl<'a, 'b: 'a> SignalAverager<'a> {
         (result, (start, end))
     }
 
-    /// Allocate a new intensity array, [`interpolate_into`](SignalAverager::interpolate_into) it, and return it.
+    /// Allocate a new intensity array and interpolate the averaged representation of the collected spectra
+    /// and return it.
+    ///
+    /// ```math
+    /// y_z = \frac{y_{j} \times (x_{j} - x_{i}) + y_{i} \times (x_z - x_j)}{x_j - x_i}
+    /// ```
     pub fn interpolate(&'a self) -> Vec<f32> {
         let mut result = self.create_intensity_array();
         self.interpolate_into_idx(&mut result, self.mz_start, self.mz_end);
