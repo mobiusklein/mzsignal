@@ -1299,7 +1299,7 @@ mod test {
         let mut peak_map_builder =
             FeatureExtracter::<_, IonMobility>::from_iter(time_axis.into_iter().zip(peak_table));
         let features = peak_map_builder.extract_features(Tolerance::PPM(15.0), 3, 0.1);
-        if true {
+        if false {
             let mut writer = io::BufWriter::new(fs::File::create("features_graph_tims.txt")?);
             writer.write_all(b"feature_id\tmz\trt\tintensity\n")?;
             for (i, f) in features.iter().enumerate() {
