@@ -38,7 +38,10 @@
 //! }
 //! ```
 //!
-use std::collections::{HashSet, VecDeque};
+use std::collections::{
+    hash_map::{Entry, HashMap},
+    HashSet, VecDeque,
+};
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::mem::{self, swap};
@@ -52,6 +55,7 @@ use mzpeaks::{
     CentroidPeak, IonMobility, Mass, Time, Tolerance, MZ,
 };
 
+use crate::peak_statistics::isclose;
 use crate::search::nearest;
 
 /// Build graphs of features to bridge gaps in a feature map
@@ -131,12 +135,27 @@ pub mod graph {
                     .into_iter()
                     .map(|i| features.get_item(i))
                     .collect();
+
+                let n_features_of = features_of.len();
                 features_of
                     .sort_by(|a, b| a.start_time().unwrap().total_cmp(&b.start_time().unwrap()));
-                let mut acc = (*features_of[0]).clone();
-                for f in &features_of[1..] {
-                    for (x, y, z) in f.iter() {
+
+                let mut iter = features_of.into_iter().enumerate();
+                let mut acc = iter.next().unwrap().1.clone();
+                let mut prev = acc.last().unwrap();
+                for (feature_index, f) in iter.skip(1) {
+                    for (node_index, (x, y, z)) in f.iter().enumerate() {
+                        if let Some(last) = acc.end_time() {
+                            if isclose(*y, last) {
+                                log::warn!(
+                                    "Attempted to add data point ({x}, {y}, {z}) from feature {feature_index} at \
+                                    {node_index}, prev {prev:?} to feature ending at {:?} with {n_features_of} features to merge",
+                                    f.at_time(last).unwrap()
+                                )
+                            }
+                        }
                         acc.push_raw(*x, *y, *z);
+                        prev = (*x, *y, *z);
                     }
                 }
                 merged_nodes.push(acc);
@@ -723,6 +742,9 @@ pub trait MapState<C: IndexedCoordinate<D> + IntensityMeasurement + 'static, D: 
         for link in path.iter() {
             let peak = self.peak_at(link.from_index);
             let time = self.time_axis()[link.from_index.time_index];
+            if let Some(last) = feature.end_time() {
+                assert!(!isclose(time, last))
+            }
             feature.push(peak, time);
         }
         feature
@@ -1058,32 +1080,70 @@ impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
         features
     }
 
+    fn solve_layer_links(
+        &self,
+        segments: &mut Vec<MapPath>,
+        index_link_weights: &mut Vec<(usize, &MapLink, f32)>,
+        seen_nodes: &mut HashSet<MapIndex>,
+    ) -> Vec<bool> {
+        index_link_weights.sort_by(|a, b| a.2.total_cmp(&b.2).reverse());
+
+        let mut seen_map_paths = vec![false; segments.len()];
+
+        for (path_i, link, _weight) in index_link_weights {
+            if seen_map_paths[*path_i] {
+                continue;
+            } else if seen_nodes.contains(&link.to_index) {
+                continue;
+            } else {
+                let path = &mut segments[*path_i];
+                seen_map_paths[*path_i] = true;
+                seen_nodes.insert(link.to_index);
+                self.extend_path(path, **link);
+            }
+        }
+        seen_map_paths
+    }
+
     fn build_paths(&self) -> Vec<MapPath> {
         let mut active_paths: Vec<MapPath> = Vec::new();
         let mut seen_nodes: HashSet<MapIndex> = HashSet::new();
         let mut ended_paths: Vec<MapPath> = Vec::new();
         let mut working_paths: Vec<MapPath> = Vec::new();
 
+        let mut segments: Vec<MapPath> = Vec::new();
+        let mut index_link_weights: Vec<(usize, &MapLink, f32)> = Vec::new();
+        let mut counter: usize = 0;
+
         for (row_idx, row) in self.paths.iter().enumerate() {
-            for mut path in active_paths.drain(..) {
+            for path in active_paths.drain(..) {
                 let last_index = path.last().unwrap().to_index;
                 if last_index.time_index == row_idx {
                     if let Some(row_cell) = row.get(last_index.peak_index) {
-                        if let Some(link) = row_cell
-                            .iter()
-                            .max_by(|a, b| a.score().total_cmp(&b.score()))
-                        {
-                            seen_nodes.insert(link.to_index);
-                            self.extend_path(&mut path, *link);
-                            working_paths.push(path);
+                        if row_cell.is_empty() {
+                            ended_paths.push(path)
                         } else {
-                            ended_paths.push(path);
-                        };
+                            for link in row_cell.iter() {
+                                index_link_weights.push((counter, link, link.score()));
+                            }
+                            segments.push(path);
+                            counter += 1;
+                        }
                     } else {
                         ended_paths.push(path);
                     }
                 } else {
                     ended_paths.push(path);
+                }
+            }
+
+            let visited_paths =
+                self.solve_layer_links(&mut segments, &mut index_link_weights, &mut seen_nodes);
+            for (visited, path) in visited_paths.into_iter().zip(segments.drain(..)) {
+                if visited {
+                    working_paths.push(path)
+                } else {
+                    ended_paths.push(path)
                 }
             }
 
@@ -1099,6 +1159,8 @@ impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
             }
             swap(&mut active_paths, &mut working_paths);
             seen_nodes.clear();
+            index_link_weights.clear();
+            counter = 0;
         }
 
         ended_paths.extend(active_paths);
@@ -1178,7 +1240,8 @@ mod test {
             peak_table.push(peaks);
         }
 
-        let mut peak_map_builder = FeatureExtracter::<_, Time>::from_iter(time_axis.into_iter().zip(peak_table));
+        let mut peak_map_builder =
+            FeatureExtracter::<_, Time>::from_iter(time_axis.into_iter().zip(peak_table));
         let features = peak_map_builder.extract_features(Tolerance::PPM(10.0), 3, 0.25);
 
         if false {
