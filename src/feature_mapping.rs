@@ -140,16 +140,17 @@ pub mod graph {
                 features_of
                     .sort_by(|a, b| a.start_time().unwrap().total_cmp(&b.start_time().unwrap()));
 
-                let mut iter = features_of.into_iter().enumerate();
-                let mut acc = iter.next().unwrap().1.clone();
+                let mut iter = features_of.iter().enumerate();
+                let mut acc = (*iter.next().unwrap().1).clone();
                 let mut prev = acc.last().unwrap();
                 for (feature_index, f) in iter.skip(1) {
                     for (node_index, (x, y, z)) in f.iter().enumerate() {
                         if let Some(last) = acc.end_time() {
                             if isclose(*y, last) {
+                                let e = y - last;
                                 log::warn!(
                                     "Attempted to add data point ({x}, {y}, {z}) from feature {feature_index} at \
-                                    {node_index}, prev {prev:?} to feature ending at {:?} with {n_features_of} features to merge",
+                                    {node_index}, prev {prev:?} to feature ending at {:?} ({e}) with {n_features_of} features to merge",
                                     f.at_time(last).unwrap()
                                 )
                             }
@@ -596,7 +597,7 @@ pub mod map {
         /// This is used to solve the dynamic programming problem when
         /// extracting paths.
         pub fn score(&self) -> f32 {
-            self.intensity_weight * (self.mass_error.powi(4) as f32)
+            self.intensity_weight * (1.0 - self.mass_error.powi(4) as f32)
         }
     }
 }
@@ -747,6 +748,15 @@ pub trait MapState<C: IndexedCoordinate<D> + IntensityMeasurement + 'static, D: 
             }
             feature.push(peak, time);
         }
+
+        if let Some(link) = path.last() {
+            let peak = self.peak_at(link.to_index);
+            let time = self.time_axis()[link.to_index.time_index];
+            if let Some(last) = feature.end_time() {
+                assert!(!isclose(time, last))
+            }
+            feature.push(peak, time);
+        }
         feature
     }
 
@@ -870,6 +880,15 @@ impl<
             feature.charge = peak.charge();
             let time = <ChargedPeakMapState<C, D> as MapState<C, D, T>>::time_axis(self)
                 [link.from_index.time_index];
+            feature.push(peak, time);
+        }
+
+        if let Some(link) = path.last() {
+            let peak = <ChargedPeakMapState<C, D> as MapState<C, D, T>>::peak_at(self, link.to_index);
+            let time = <ChargedPeakMapState<C, D> as MapState<C, D, T>>::time_axis(self)[link.to_index.time_index];
+            if let Some(last) = feature.end_time() {
+                assert!(!isclose(time, last))
+            }
             feature.push(peak, time);
         }
         feature
@@ -1032,7 +1051,7 @@ impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
                         let mass_error = error_tolerance
                             .call(peak_at.coordinate(), peak.coordinate())
                             .abs()
-                            / error_tolerance.bounds(peak_at.coordinate()).1;
+                            / error_tolerance.tol();
                         let intensity_weight =
                             (peak.intensity().log10() + peak_at.intensity().log10()) / 2.0;
                         MapLink::new(from_index, to_index, mass_error, intensity_weight)
@@ -1046,9 +1065,9 @@ impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
     fn init_path_from_link(&self, link: &MapLink) -> MapPath {
         let from_peak = self.state.peak_at(link.from_index);
         let to_peak = self.state.peak_at(link.to_index);
-        let coord = (from_peak.coordinate() * from_peak.intensity() as f64)
-            + (to_peak.coordinate() * to_peak.intensity() as f64)
-                / ((from_peak.intensity() + to_peak.intensity()) as f64);
+        let coord = ((from_peak.coordinate() * from_peak.intensity() as f64)
+            + (to_peak.coordinate() * to_peak.intensity() as f64))
+            / ((from_peak.intensity() + to_peak.intensity()) as f64);
         MapPath::new(vec![*link], coord, link.score())
     }
 
@@ -1090,7 +1109,7 @@ impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
 
         let mut seen_map_paths = vec![false; segments.len()];
 
-        for (path_i, link, _weight) in index_link_weights {
+        for (path_i, link, weight) in index_link_weights {
             if seen_map_paths[*path_i] {
                 continue;
             } else if seen_nodes.contains(&link.to_index) {
@@ -1099,10 +1118,44 @@ impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
                 let path = &mut segments[*path_i];
                 seen_map_paths[*path_i] = true;
                 seen_nodes.insert(link.to_index);
+                if log::log_enabled!(log::Level::Trace) {
+                    let time_at = self.state.time_axis()[link.to_index.time_index];
+                    let peak_at = self.state.peak_at(link.to_index);
+                    log::trace!(
+                        "Binding {link:?} with weight {weight} at coordinate {} {time_at}|{}|{}",
+                        path.coordinate,
+                        peak_at.coordinate(),
+                        peak_at.get_index()
+                    );
+                }
                 self.extend_path(path, **link);
             }
         }
         seen_map_paths
+    }
+
+    fn solve_layer_links_unbound(&self, link_weights: &mut Vec<(&MapLink, f32)>, seen_nodes: &mut HashSet<MapIndex>, working_paths: &mut Vec<MapPath>) {
+        link_weights.sort_by(|a, b| {
+            a.1.total_cmp(&b.1).reverse()
+        });
+
+        for (link, weight) in link_weights.drain(..) {
+            if seen_nodes.contains(&link.to_index) {
+                continue;
+            }
+            seen_nodes.insert(link.to_index);
+            if log::log_enabled!(log::Level::Trace) {
+                let time_at = self.state.time_axis()[link.to_index.time_index];
+                let peak_at = self.state.peak_at(link.to_index);
+                log::trace!(
+                    "Creating path from {link:?} with weight {weight} at coordinate {time_at}|{}|{}",
+                    peak_at.coordinate(),
+                    peak_at.get_index()
+                );
+            }
+            let path = self.init_path_from_link(link);
+            working_paths.push(path);
+        }
     }
 
     fn build_paths(&self) -> Vec<MapPath> {
@@ -1112,14 +1165,17 @@ impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
         let mut working_paths: Vec<MapPath> = Vec::new();
 
         let mut segments: Vec<MapPath> = Vec::new();
+        let mut unbound_link_weights: Vec<(&MapLink, f32)> = Vec::new();
         let mut index_link_weights: Vec<(usize, &MapLink, f32)> = Vec::new();
         let mut counter: usize = 0;
 
         for (row_idx, row) in self.paths.iter().enumerate() {
             for path in active_paths.drain(..) {
                 let last_index = path.last().unwrap().to_index;
+                // This path's terminal node steps on this row/time
                 if last_index.time_index == row_idx {
                     if let Some(row_cell) = row.get(last_index.peak_index) {
+                        // If the path has no links at this time point
                         if row_cell.is_empty() {
                             ended_paths.push(path)
                         } else {
@@ -1132,6 +1188,7 @@ impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
                     } else {
                         ended_paths.push(path);
                     }
+                // Otherwise this path has ended and we'll move to the finished paths
                 } else {
                     ended_paths.push(path);
                 }
@@ -1147,16 +1204,15 @@ impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
                 }
             }
 
-            for links in row {
+
+            for links in row.iter() {
                 for link in links {
-                    if seen_nodes.contains(&link.to_index) {
-                        continue;
-                    } else {
-                        let path = self.init_path_from_link(link);
-                        working_paths.push(path);
-                    }
+                    unbound_link_weights.push((link, link.score()))
                 }
             }
+
+            self.solve_layer_links_unbound(&mut unbound_link_weights, &mut seen_nodes, &mut working_paths);
+
             swap(&mut active_paths, &mut working_paths);
             seen_nodes.clear();
             index_link_weights.clear();
@@ -1223,7 +1279,39 @@ mod test {
         io::{self, prelude::*},
     };
 
-    #[test]
+    #[test_log::test]
+    fn test_construction2() -> io::Result<()> {
+        let time_arrays = arrays_over_time_from_file("./test/data/peaks_over_time_tims.txt")?;
+        let mut time_axis = Vec::new();
+        let mut peak_table = Vec::new();
+
+        for (t, row) in time_arrays {
+            time_axis.push(t);
+            let peaks: MZPeakSetType<CentroidPeak> = row
+                .mz_array
+                .into_iter()
+                .zip(row.intensity_array.into_iter())
+                .map(|(mz, i)| CentroidPeak::new(*mz, *i, 0))
+                .collect();
+            peak_table.push(peaks);
+        }
+
+        let mut peak_map_builder =
+            FeatureExtracter::<_, IonMobility>::from_iter(time_axis.into_iter().zip(peak_table));
+        let features = peak_map_builder.extract_features(Tolerance::PPM(15.0), 3, 0.1);
+        if true {
+            let mut writer = io::BufWriter::new(fs::File::create("features_graph_tims.txt")?);
+            writer.write_all(b"feature_id\tmz\trt\tintensity\n")?;
+            for (i, f) in features.iter().enumerate() {
+                for (mz, rt, inten) in f.iter() {
+                    writer.write_all(format!("{i}\t{mz}\t{rt}\t{inten}\n").as_bytes())?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test_log::test]
     fn test_construction() -> io::Result<()> {
         let time_arrays = arrays_over_time_from_file("./test/data/peaks_over_time.txt")?;
         let mut time_axis = Vec::new();
@@ -1255,7 +1343,7 @@ mod test {
         }
 
         eprintln!("Extracted {} features", features.len());
-        assert_eq!(features.len(), 15780);
+        assert_eq!(features.len(), 15427);
         Ok(())
     }
 }
