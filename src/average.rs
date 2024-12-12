@@ -1234,7 +1234,6 @@ mod test {
         let mut t_blocks: Vec<(f64, ArrayPair<'_>)> = time_arrays
             .into_iter()
             .take(5)
-            .par_bridge()
             .map(|(t, row)| prepare_block(t, row))
             .collect();
 
