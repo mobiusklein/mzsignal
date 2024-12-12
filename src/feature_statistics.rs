@@ -57,6 +57,9 @@ use std::{
 
 use libm::erf;
 
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
+
 use mzpeaks::prelude::TimeArray;
 
 use crate::arrayops::{trapz, ArrayPair, ArrayPairSplit};
@@ -104,6 +107,7 @@ impl<'a> PeakFitArgsIter<'a> {
 ///
 /// Produced by [`PeakFitArgs::locate_extrema`]
 #[derive(Debug, Default, Clone, Copy, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct SplittingPoint {
     /// The signal magnitude of the first maximum point
     pub first_maximum_height: f32,
@@ -780,6 +784,7 @@ pub trait PeakShapeModel: Clone {
 /// y = a\exp\left({\frac{-(\mu - x)^2}{2\sigma^2}}\right)
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct GaussianPeakShape {
     pub mu: f64,
     pub sigma: f64,
@@ -1031,6 +1036,7 @@ impl PeakShapeModel for GaussianPeakShape {
 /// y = a\left(\text{erf}\left({\sqrt{2} \lambda\frac{\mu - x}{2\sigma}}\right) + 1\right)\exp\left(-\frac{(\mu-x)^2}{2\sigma^2}\right)
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct SkewedGaussianPeakShape {
     pub mu: f64,
     pub sigma: f64,
@@ -1362,6 +1368,7 @@ impl PeakShapeModel for SkewedGaussianPeakShape {
 /// \end{cases}
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct BiGaussianPeakShape {
     pub mu: f64,
     pub sigma_falling: f64,
@@ -1793,6 +1800,7 @@ impl<'a, 'b, T: PeakShapeModel + Debug> PeakShapeFitter<'a, 'b, T> {
 /// A dispatching peak shape model that can represent a variety of different
 /// peak shapes.
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum PeakShape {
     Gaussian(GaussianPeakShape),
     SkewedGaussian(SkewedGaussianPeakShape),
@@ -1932,6 +1940,7 @@ impl PeakShapeModel for PeakShape {
 
 /// Represent a combination of multiple [`PeakShape`] models
 #[derive(Debug, Default, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct MultiPeakShapeFit {
     fits: Vec<PeakShape>,
 }

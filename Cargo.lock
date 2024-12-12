@@ -1043,6 +1043,7 @@ dependencies = [
  "pretty_env_logger",
  "rayon",
  "rstest",
+ "serde",
  "test-log",
  "thiserror",
 ]
