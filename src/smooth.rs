@@ -137,29 +137,15 @@ pub fn moving_average<F: Float + AddAssign + SubAssign, const N: usize>(
 /// This uses dynamic dispatch to a fixed window size implementation. This maxes out
 /// at 20 currently.
 pub fn moving_average_dyn<F: Float + AddAssign + SubAssign>(xdata: &[F], xout: &mut [F], size: usize) {
-    match size {
-        1 => moving_average::<F, 1>(xdata, xout),
-        2 => moving_average::<F, 1>(xdata, xout),
-        3 => moving_average::<F, 3>(xdata, xout),
-        4 => moving_average::<F, 4>(xdata, xout),
-        5 => moving_average::<F, 5>(xdata, xout),
-        6 => moving_average::<F, 6>(xdata, xout),
-        7 => moving_average::<F, 7>(xdata, xout),
-        8 => moving_average::<F, 8>(xdata, xout),
-        9 => moving_average::<F, 9>(xdata, xout),
-        10 => moving_average::<F, 10>(xdata, xout),
-        11 => moving_average::<F, 11>(xdata, xout),
-        12 => moving_average::<F, 12>(xdata, xout),
-        13 => moving_average::<F, 13>(xdata, xout),
-        14 => moving_average::<F, 14>(xdata, xout),
-        15 => moving_average::<F, 15>(xdata, xout),
-        16 => moving_average::<F, 16>(xdata, xout),
-        17 => moving_average::<F, 17>(xdata, xout),
-        18 => moving_average::<F, 18>(xdata, xout),
-        19 => moving_average::<F, 19>(xdata, xout),
-        20 => moving_average::<F, 20>(xdata, xout),
-        _ => moving_average::<F, 20>(xdata, xout)
+    macro_rules! match_i {
+        ($($i:literal, )*) => {
+            match size {
+                $($i => moving_average::<F, $i>(xdata, xout),)*
+                _ => moving_average::<F, 20>(xdata, xout)
+            }
+        };
     }
+    match_i!(1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,)
 }
 
 /// All the ways a Savitsky-Golay filter can go wrong
@@ -637,7 +623,7 @@ mod test {
 
     use std::{
         fs,
-        io::{self, Write},
+        io::{self, prelude::*},
     };
 
     #[cfg(feature = "nalgebra")]
@@ -650,23 +636,27 @@ mod test {
             .collect();
 
         let filter = SavitskyGolay::<f32>::new(5, 3, 0).unwrap();
+
         let smoothed = filter.smooth(&actual_y).unwrap();
+        let smoothed2 = savitsky_golay(&actual_y, 5, 3, 0).unwrap();
 
-        match fs::create_dir("tmp") { Ok(_) => {}, Err(_) => {} };
+        assert_eq!(smoothed, smoothed2);
 
-        let mut coeffh = fs::File::create("tmp/coefs.txt")?;
-        filter.coefs.iter().for_each(|y| {
-            coeffh.write(format!("{}\n", *y).as_bytes()).unwrap();
-        });
+        // match fs::create_dir("tmp") { Ok(_) => {}, Err(_) => {} };
 
-        let mut rawfh = fs::File::create("tmp/raw.txt")?;
-        actual_y.iter().for_each(|y| {
-            rawfh.write(format!("{}\n", *y).as_bytes()).unwrap();
-        });
-        let mut rawfh = fs::File::create("tmp/savgol.txt")?;
-        smoothed.iter().for_each(|y| {
-            rawfh.write(format!("{}\n", *y).as_bytes()).unwrap();
-        });
+        // let mut coeffh = fs::File::create("tmp/coefs.txt")?;
+        // filter.coefs.iter().for_each(|y| {
+        //     coeffh.write(format!("{}\n", *y).as_bytes()).unwrap();
+        // });
+
+        // let mut rawfh = fs::File::create("tmp/raw.txt")?;
+        // actual_y.iter().for_each(|y| {
+        //     rawfh.write(format!("{}\n", *y).as_bytes()).unwrap();
+        // });
+        // let mut rawfh = fs::File::create("tmp/savgol.txt")?;
+        // smoothed.iter().for_each(|y| {
+        //     rawfh.write(format!("{}\n", *y).as_bytes()).unwrap();
+        // });
 
         let diff: f32 = actual_y
             .iter()
