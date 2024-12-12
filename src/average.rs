@@ -437,12 +437,14 @@ impl<'a, 'b: 'a> SignalAverager<'a> {
                 chunk[i] /= normalizer;
             }
         }
-        it.into_remainder().iter_mut().for_each(|y| *y /= normalizer);
+        it.into_remainder()
+            .iter_mut()
+            .for_each(|y| *y /= normalizer);
     }
 
     fn normalize_intensity_by_scan_count(&self, out: &mut [f32]) {
         #[cfg(target_arch = "x86_64")]
-        if std::arch::is_x86_feature_detected!("avx"){
+        if std::arch::is_x86_feature_detected!("avx") {
             #[cfg(feature = "avx")]
             self.normalize_intensity_by_scan_count_avx(out);
             #[cfg(not(feature = "avx"))]
@@ -1114,10 +1116,23 @@ mod test {
     #[test]
     fn test_averaging() -> io::Result<()> {
         let scans = text::arrays_over_time_from_file("./test/data/profiles.txt")?;
-        let scans: Vec<_> = scans.into_iter().skip(3).take(3).map(|(_, arrays)| arrays).collect();
+        let scans: Vec<_> = scans
+            .into_iter()
+            .skip(3)
+            .take(3)
+            .map(|(_, arrays)| arrays)
+            .collect();
 
-        let low_mz = scans.iter().map(|s| s.min_mz).min_by(|a, b| a.total_cmp(b)).unwrap();
-        let high_mz = scans.iter().map(|s| s.max_mz).max_by(|a, b| a.total_cmp(b)).unwrap();
+        let low_mz = scans
+            .iter()
+            .map(|s| s.min_mz)
+            .min_by(|a, b| a.total_cmp(b))
+            .unwrap();
+        let high_mz = scans
+            .iter()
+            .map(|s| s.max_mz)
+            .max_by(|a, b| a.total_cmp(b))
+            .unwrap();
 
         let mut averager = SignalAverager::new(low_mz, high_mz, 0.001);
         averager.extend(scans.clone().into_iter());
@@ -1183,15 +1198,24 @@ mod test {
         }
     }
 
+    #[test]
+    fn test_rebin() {
+        let pair = rebin(&X, &Y, 0.001);
+        let (acc, _, n) = pair.mz_array().iter().copied().fold((0.0, pair.min_mz, 0), |(acc, last, n), mz| {
+            (acc + (mz - last), mz, n + 1)
+        });
+        let avg = acc / (n as f64);
+        assert!((avg - 0.0009998319327731112).abs() < 1e-6);
+    }
+
     #[test_log::test]
     fn test_segment_grid() -> io::Result<()> {
         use crate::text::arrays_over_time_from_file;
         let time_arrays = arrays_over_time_from_file("./test/data/peaks_over_time.txt")?;
 
-        let mut averager = SegmentGridSignalAverager::new(200.0, 2000.0, 0.001);
         let reprofiler = crate::reprofile::PeakSetReprofiler::new(200.0, 2000.0, 0.001);
 
-        for (_, (t, row)) in time_arrays.into_iter().enumerate().take(5) {
+        let prepare_block = |t: f64, row: ArrayPair| {
             // log::info!("{i}: {t} with {} peaks", row.len());
             let peaks: MZPeakSetType<FittedPeak> = row
                 .mz_array
@@ -1204,9 +1228,19 @@ mod test {
             let peak_models = reprofiler
                 .build_peak_shape_models(&peaks.as_slice(), crate::reprofile::PeakShape::Gaussian);
             let block = reprofiler.reprofile_from_models(&peak_models);
+            (t, block)
+        };
 
-            averager.push(t, block);
-        }
+        let mut t_blocks: Vec<(f64, ArrayPair<'_>)> = time_arrays
+            .into_iter()
+            .take(5)
+            .par_bridge()
+            .map(|(t, row)| prepare_block(t, row))
+            .collect();
+
+        t_blocks.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let mut averager = SegmentGridSignalAverager::from_iter(200.0, 2000.0, 0.001, t_blocks.into_iter());
+        averager.array_pairs.sort();
 
         // log::info!("Start averaging");
         let views: Vec<_> = averager.iter(1).collect();
