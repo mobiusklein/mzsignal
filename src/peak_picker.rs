@@ -18,7 +18,7 @@ use crate::peak_statistics::lorentzian_fit;
 use crate::peak_statistics::{
     approximate_signal_to_noise, full_width_at_half_max, quadratic_fit, WidthFit,
 };
-use crate::search::{nearest, nearest_binary, nearest_left, nearest_right};
+use crate::search::{nearest, nearest_left, nearest_right};
 use std::collections::btree_map::{BTreeMap, Entry};
 
 /// The type of peak picking to perform, defining the expected
@@ -35,7 +35,7 @@ pub enum PeakFitType {
     Apex,
     /// Fit a Lorentzian peak shape using an iterative least squares solution
     /// searching an approximate local optimum.
-    Lorentzian
+    Lorentzian,
 }
 
 /// Check if the value in `it` are monotonically ascending or flat
@@ -124,22 +124,22 @@ impl PeakPickerBuilder {
         Self::default()
     }
 
-    pub fn background_intensity(&mut self, background_intensity: f32) -> &mut Self {
+    pub fn background_intensity(mut self, background_intensity: f32) -> Self {
         self.background_intensity = background_intensity;
         self
     }
 
-    pub fn intensity_threshold(&mut self, intensity_threshold: f32) -> &mut Self {
+    pub fn intensity_threshold(mut self, intensity_threshold: f32) -> Self {
         self.intensity_threshold = intensity_threshold;
         self
     }
 
-    pub fn signal_to_noise_threshold(&mut self, signal_to_noise_threshold: f32) -> &mut Self {
+    pub fn signal_to_noise_threshold(mut self, signal_to_noise_threshold: f32) -> Self {
         self.signal_to_noise_threshold = signal_to_noise_threshold;
         self
     }
 
-    pub fn fit_type(&mut self, fit_type: PeakFitType) -> &mut Self {
+    pub fn fit_type(mut self, fit_type: PeakFitType) -> Self {
         self.fit_type = fit_type;
         self
     }
@@ -223,7 +223,9 @@ impl PeakPicker {
         match self.fit_type {
             PeakFitType::Quadratic => quadratic_fit(mz_array, intensity_array, index, partial_fit),
             PeakFitType::Apex => mz_array[index],
-            PeakFitType::Lorentzian => lorentzian_fit(mz_array, intensity_array, index, partial_fit),
+            PeakFitType::Lorentzian => {
+                lorentzian_fit(mz_array, intensity_array, index, partial_fit)
+            }
         }
     }
 
@@ -481,7 +483,6 @@ impl PeakPicker {
     }
 }
 
-
 /// A convenience function that uses a default peak picking configuration to pick peaks from paired
 /// m/z and intensity arrays.
 ///
@@ -508,6 +509,43 @@ mod test {
     use crate::average::SignalAverager;
     use crate::test_data::{NOISE, X, Y};
     use rstest::rstest;
+
+    #[test]
+    fn test_builder() {
+        let builder = PeakPickerBuilder::new()
+            .background_intensity(1.0)
+            .intensity_threshold(5.0)
+            .signal_to_noise_threshold(1.5)
+            .fit_type(PeakFitType::Quadratic);
+        let picker = builder.build();
+        assert_eq!(picker.background_intensity, 1.0);
+        assert_eq!(picker.intensity_threshold, 5.0);
+        assert_eq!(picker.signal_to_noise_threshold, 1.5);
+        assert_eq!(picker.fit_type, PeakFitType::Quadratic);
+    }
+
+    #[test]
+    fn test_peak_picker_no_noise_lorentzian() {
+        let picker: PeakPicker = PeakPickerBuilder::new().fit_type(PeakFitType::Lorentzian).into();
+        let mut acc = Vec::new();
+        let pair = crate::average::rebin(&X, &Y, 0.005);
+        // let result = picker.discover_peaks(&X, &Y, &mut acc);
+        let result = picker.discover_peaks(&pair.mz_array, &pair.intensity_array, &mut acc);
+        let z = result.expect("Should not encounter an error");
+        assert_eq!(z, 4);
+        // These numbers are spacing-dependent, but they are consistent
+        let xs = [
+            180.06583809999938,
+            181.06583809999938,
+            182.06583809999938,
+            183.06583809999938,
+        ];
+        for (i, (peak, x)) in acc.iter().zip(xs.iter()).enumerate() {
+            let mz = peak.mz;
+            let err = mz - x;
+            assert!(err.abs() < 1e-6, "{i}: {mz} - {x} = {err}");
+        }
+    }
 
     #[test]
     fn test_peak_picker_no_noise() {
