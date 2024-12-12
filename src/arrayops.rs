@@ -443,4 +443,31 @@ mod test {
         assert_eq!(i, 20);
     }
 
+
+    fn behaviors<T: ArrayPairLike>(arrays: &T) {
+        assert!(arrays.len() > 0);
+        assert!(!arrays.is_empty());
+        let range = arrays.find_between(179.02, 179.5);
+        assert_eq!(range.len(), 10);
+        assert_eq!(range.get(0).unwrap().0, range.min_mz);
+
+        let range = arrays.find_between(200.0, 200.1);
+        assert!(range.is_empty());
+        assert_eq!(range.mz_array(), range.borrow().mz_array());
+        assert_eq!(range.intensity_array(), range.clone().to_owned().intensity_array());
+    }
+
+    #[test]
+    fn test_between() {
+        let arrays = ArrayPair::wrap(&X, &Y);
+        behaviors(&arrays);
+
+        let split = ArrayPairSplit::wrap(&X, &Y);
+        assert!(split.len() > 0);
+        assert!(!split.is_empty());
+        assert_eq!(split.borrow().mz_array(), arrays.mz_array());
+        assert_eq!(split.clone().to_owned().intensity_array(), arrays.intensity_array());
+        behaviors(&split);
+    }
+
 }
