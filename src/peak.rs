@@ -10,7 +10,13 @@ use mzpeaks::{
     CentroidLike, CoordinateLike, IndexType, IndexedCoordinate, IntensityMeasurement, MZ,
 };
 
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
+
+const DEFAULT_FWHM: f32 = 0.005;
+
 #[derive(Debug, Clone, Copy, Default)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 /// A [`FittedPeak`] implements the [`CentroidLike`](https://docs.rs/mzpeaks/latest/mzpeaks/peak/trait.CentroidLike.html) trait
 /// with an m/z coordinate, but also a shape attribute `full_width_at_half_max` and a
 /// intensity uncertainty, `signal_to_noise_ratio`.
@@ -44,8 +50,48 @@ impl FittedPeak {
     }
 }
 
-// Implement the CentroidLike interface
-mzpeaks::implement_centroidlike!(FittedPeak, true);
+mzpeaks::implement_mz_coord!(FittedPeak);
+
+impl mzpeaks::IndexedCoordinate<mzpeaks::MZ> for FittedPeak {
+    #[inline]
+    fn get_index(&self) -> mzpeaks::IndexType {
+        self.index
+    }
+    #[inline]
+    fn set_index(&mut self, index: mzpeaks::IndexType) {
+        self.index = index
+    }
+}
+
+impl From<FittedPeak> for mzpeaks::CentroidPeak {
+    fn from(peak: FittedPeak) -> Self {
+        peak.as_centroid()
+    }
+}
+
+impl From<FittedPeak> for mzpeaks::peak::MZPoint {
+    fn from(peak: FittedPeak) -> Self {
+        Self {
+            mz: peak.coordinate(),
+            intensity: peak.intensity(),
+            ..Self::default()
+        }
+    }
+}
+
+/// Conversion from a [`mzpeaks::CentroidPeak`]
+impl From<mzpeaks::CentroidPeak> for FittedPeak {
+    fn from(peak: mzpeaks::CentroidPeak) -> Self {
+        let mut inst = Self {
+            mz: peak.coordinate(),
+            intensity: peak.intensity(),
+            full_width_at_half_max: DEFAULT_FWHM,
+            ..Self::default()
+        };
+        inst.set_index(peak.index);
+        inst
+    }
+}
 
 impl From<MZPoint> for FittedPeak {
     fn from(value: MZPoint) -> Self {
@@ -53,6 +99,7 @@ impl From<MZPoint> for FittedPeak {
             mz: value.mz,
             intensity: value.intensity,
             index: value.get_index(),
+            full_width_at_half_max: DEFAULT_FWHM,
             ..Default::default()
         }
     }
@@ -65,5 +112,21 @@ impl fmt::Display for FittedPeak {
             "FittedPeak({}, {}, {}, {}, {})",
             self.mz, self.intensity, self.index, self.full_width_at_half_max, self.signal_to_noise
         )
+    }
+}
+
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_conversion() {
+        let peak = CentroidPeak::new(1500.0, 6e3, 0);
+        let fpeak = FittedPeak::from(peak.clone());
+        assert_eq!(fpeak.full_width_at_half_max, DEFAULT_FWHM);
+        assert_eq!(fpeak.mz(), peak.mz);
+        assert_eq!(CentroidPeak::from(fpeak.clone()), peak);
+        assert_eq!(MZPoint::from(fpeak.clone()), MZPoint::from(peak.clone()));
     }
 }
