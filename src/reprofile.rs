@@ -29,24 +29,24 @@ pub enum PeakShape {
 #[derive(Debug, Clone)]
 /// A model for predicting the signal shape given a fitted peak as a set
 /// of model parameters
-pub struct PeakShapeModel<'lifespan> {
-    pub peak: Cow<'lifespan, FittedPeak>,
+pub struct PeakShapeModel {
+    pub peak: FittedPeak,
     pub shape: PeakShape,
 }
 
-impl<'lifespan> CoordinateLike<MZ> for PeakShapeModel<'lifespan> {
+impl CoordinateLike<MZ> for PeakShapeModel {
     fn coordinate(&self) -> f64 {
         self.peak.coordinate()
     }
 }
 
-impl<'lifespan> IntensityMeasurement for PeakShapeModel<'lifespan> {
+impl IntensityMeasurement for PeakShapeModel {
     fn intensity(&self) -> f32 {
         self.peak.intensity()
     }
 }
 
-impl<'lifespan> IndexedCoordinate<MZ> for PeakShapeModel<'lifespan> {
+impl IndexedCoordinate<MZ> for PeakShapeModel {
     fn get_index(&self) -> IndexType {
         self.peak.get_index()
     }
@@ -54,36 +54,36 @@ impl<'lifespan> IndexedCoordinate<MZ> for PeakShapeModel<'lifespan> {
     fn set_index(&mut self, _index: IndexType) {}
 }
 
-impl<'lifespan> PartialEq<PeakShapeModel<'lifespan>> for PeakShapeModel<'lifespan> {
-    fn eq(&self, other: &PeakShapeModel<'lifespan>) -> bool {
+impl PartialEq<PeakShapeModel> for PeakShapeModel {
+    fn eq(&self, other: &PeakShapeModel) -> bool {
         (self.peak.mz - other.peak.mz).abs() < 1e-6
             && (self.peak.intensity - other.peak.intensity).abs() < 1e-6
     }
 }
 
-impl<'a> Eq for PeakShapeModel<'a> {}
+impl Eq for PeakShapeModel {}
 
-impl<'lifespan> PartialOrd<PeakShapeModel<'lifespan>> for PeakShapeModel<'lifespan> {
-    fn partial_cmp(&self, other: &PeakShapeModel<'lifespan>) -> Option<cmp::Ordering> {
+impl PartialOrd<PeakShapeModel> for PeakShapeModel {
+    fn partial_cmp(&self, other: &PeakShapeModel) -> Option<cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl<'lifespan> Ord for PeakShapeModel<'lifespan> {
+impl Ord for PeakShapeModel {
     fn cmp(&self, other: &Self) -> cmp::Ordering {
         self.peak.mz.partial_cmp(&other.peak.mz).unwrap()
     }
 }
 
-impl<'lifespan> PeakShapeModel<'lifespan> {
+impl PeakShapeModel {
     pub fn from_centroid(
         mz: f64,
         intensity: f32,
         full_width_at_half_max: f32,
         shape: PeakShape,
-    ) -> PeakShapeModel<'lifespan> {
+    ) -> PeakShapeModel {
         PeakShapeModel {
-            peak: Cow::Owned(FittedPeak {
+            peak: (FittedPeak {
                 mz,
                 intensity,
                 full_width_at_half_max,
@@ -93,14 +93,14 @@ impl<'lifespan> PeakShapeModel<'lifespan> {
         }
     }
 
-    pub fn new(peak: Cow<'lifespan, FittedPeak>, shape: PeakShape) -> Self {
+    pub fn new(peak: FittedPeak, shape: PeakShape) -> Self {
         Self { peak, shape }
     }
 
     /// Create a [`PeakShape::Gaussian`] [`PeakShapeModel`]
     pub fn gaussian(peak: &FittedPeak) -> PeakShapeModel {
         PeakShapeModel {
-            peak: Cow::Borrowed(peak),
+            peak: peak.clone(),
             shape: PeakShape::Gaussian,
         }
     }
@@ -121,7 +121,6 @@ impl<'lifespan> PeakShapeModel<'lifespan> {
             (-(f64::powf(mz - self.peak.mz, 2.0)) / (2.0 * f64::powf(spread as f64, 2.0))).exp();
         self.peak.intensity * scaler as f32
     }
-
 
     #[cfg(all(target_arch = "x86_64", feature = "avx"))]
     fn gaussian_avx(&self, grid_mz: &[f64], out: &mut [f32]) {
@@ -218,30 +217,30 @@ impl<'lifespan> PeakShapeModel<'lifespan> {
     }
 }
 
-impl<'lifespan> From<&'lifespan FittedPeak> for PeakShapeModel<'lifespan> {
-    fn from(peak: &'lifespan FittedPeak) -> PeakShapeModel<'lifespan> {
+impl From<&FittedPeak> for PeakShapeModel {
+    fn from(peak: &FittedPeak) -> PeakShapeModel {
         PeakShapeModel::gaussian(peak)
     }
 }
 
-impl From<FittedPeak> for PeakShapeModel<'static> {
+impl From<FittedPeak> for PeakShapeModel {
     fn from(value: FittedPeak) -> Self {
         PeakShapeModel {
-            peak: Cow::Owned(value),
+            peak: value,
             shape: PeakShape::Gaussian,
         }
     }
 }
 
 /// Convert something into a [`PeakShapeModel`] with a given width parameter
-pub trait AsPeakShapeModel<'a, 'b: 'a> {
+pub trait AsPeakShapeModel {
     /// Convert something into a [`PeakShapeModel`] with a given width parameter `fwhm`
     /// and a specific [`PeakShape`]
-    fn as_peak_shape_model(&'b self, fwhm: f32, shape: PeakShape) -> PeakShapeModel<'a>;
+    fn as_peak_shape_model(&self, fwhm: f32, shape: PeakShape) -> PeakShapeModel;
 }
 
-impl<'a, 'b: 'a, T: CentroidLike> AsPeakShapeModel<'a, 'b> for &T {
-    fn as_peak_shape_model(&'b self, fwhm: f32, shape: PeakShape) -> PeakShapeModel<'a> {
+impl<T: CentroidLike> AsPeakShapeModel for T {
+    fn as_peak_shape_model(&self, fwhm: f32, shape: PeakShape) -> PeakShapeModel {
         PeakShapeModel::from_centroid(self.coordinate(), self.intensity(), fwhm, shape)
     }
 }
@@ -273,14 +272,14 @@ impl<'passing, 'transient: 'passing, 'lifespan: 'transient> PeakSetReprofiler {
         &self,
         peaks: &'lifespan [T],
         shape: PeakShape,
-    ) -> Vec<PeakShapeModel<'lifespan>>
+    ) -> Vec<PeakShapeModel>
     where
-        &'lifespan T: Into<PeakShapeModel<'lifespan>>,
+        &'lifespan T: Into<PeakShapeModel>,
     {
-        let mut result: Vec<PeakShapeModel<'lifespan>> = Vec::with_capacity(peaks.len());
+        let mut result: Vec<PeakShapeModel> = Vec::with_capacity(peaks.len());
         for mut model in peaks
             .iter()
-            .map(|x| -> PeakShapeModel<'lifespan> { x.into() })
+            .map(|x| -> PeakShapeModel { x.into() })
         {
             model.shape = shape;
             result.push(model);
@@ -292,7 +291,7 @@ impl<'passing, 'transient: 'passing, 'lifespan: 'transient> PeakSetReprofiler {
     /// Create a new spectrum from `models` over the shared m/z axis
     pub fn reprofile_from_models(
         &'lifespan self,
-        models: &[PeakShapeModel<'transient>],
+        models: &[PeakShapeModel],
     ) -> ArrayPair<'lifespan> {
         if models.is_empty() {
             return ArrayPair::new(
@@ -324,11 +323,11 @@ impl<'passing, 'transient: 'passing, 'lifespan: 'transient> PeakSetReprofiler {
 
     /// Create a new spectrum from `peaks` after creating [`PeakShapeModel`]s of them
     /// over the shared m/z axis
-    pub fn reprofile<T: Into<PeakShapeModel<'transient>> + Clone>(
+    pub fn reprofile<T: Into<PeakShapeModel> + Clone>(
         &'lifespan self,
-        peaks: &'lifespan [T],
+        peaks: &[T],
     ) -> ArrayPair<'lifespan> {
-        let models: Vec<_> = peaks.iter().cloned().map(|p| p.into()).collect();
+        let models: Vec<PeakShapeModel> = peaks.iter().cloned().map(|p| p.into()).collect();
         self.reprofile_from_models(&models)
     }
 
@@ -340,7 +339,7 @@ impl<'passing, 'transient: 'passing, 'lifespan: 'transient> PeakSetReprofiler {
         fwhm: f32,
     ) -> ArrayPair<'lifespan>
     where
-        T: AsPeakShapeModel<'passing, 'passing>,
+        T: AsPeakShapeModel,
     {
         let mut models = Vec::with_capacity(peaks.len());
         for p in peaks.iter() {
@@ -357,10 +356,10 @@ pub fn reprofile<'transient, 'lifespan: 'transient, T: Iterator<Item = &'lifespa
     dx: f64,
 ) -> ArrayPair<'static>
 where
-    &'lifespan P: Into<PeakShapeModel<'transient>>,
+    &'lifespan P: Into<PeakShapeModel>,
     P: 'static,
 {
-    let models: Vec<PeakShapeModel<'transient>> = peaks.map(|p| p.into()).collect();
+    let models: Vec<PeakShapeModel> = peaks.map(|p| p.into()).collect();
     if models.is_empty() {
         return ArrayPair::from((Vec::new(), Vec::new()));
     }
@@ -387,11 +386,9 @@ mod test {
     use crate::peak_picker::pick_peaks;
     use crate::reprofile::reprofile;
     use crate::test_data::{NOISE, X, Y};
-    #[allow(unused)]
-    use crate::text;
+    use mzpeaks::{prelude::*, MZPeakSetType};
 
-    #[test]
-    fn test_builder() -> () {
+    fn prepare_peaks() -> Vec<FittedPeak> {
         let yhat: Vec<f32> = Y
             .iter()
             .zip(NOISE.iter())
@@ -399,10 +396,116 @@ mod test {
             .collect();
         let mut peaks = pick_peaks(&X, &yhat).unwrap();
         peaks.sort_by(|a, b| a.mz.total_cmp(&b.mz));
+        peaks
+    }
+
+    #[test]
+    fn test_peak_models_peaklike() {
+        let peaks = MZPeakSetType::new(prepare_peaks());
+        let shapes: MZPeakSetType<_> = peaks.iter().map(PeakShapeModel::gaussian).collect();
+
+        for (a, b) in peaks.iter().zip(shapes.iter()) {
+            assert_eq!(a.mz(), b.mz());
+            assert_eq!(a.intensity(), b.intensity());
+            assert_eq!(a.get_index(), b.get_index());
+        }
+        assert_eq!(shapes, shapes);
+    }
+
+    #[test]
+    fn test_peak_model() {
+        let peak = FittedPeak::new(512.0, 1000.0, 0, 1000.0, 0.005);
+        let shape = PeakShapeModel::gaussian(&peak);
+
+        let yhat = shape.predict(&peak.mz);
+        let y = shape.intensity();
+        assert!((yhat - y).abs() < 1e-3);
+
+        let a = shape.area(0.001);
+        assert!((a - 5.322336).abs() < 1e-3);
+
+        let (start, end) = shape.extremes();
+        let mz_array = gridspace(start, end, 0.001);
+        let mut intensity_array = vec![0.0f32; mz_array.len()];
+        shape.shape_in_fallback::<4>(&mz_array, &mut intensity_array);
+        let b= trapz(&mz_array, &intensity_array);
+        assert!((b - a).abs() < 1e-3);
+    }
+
+    #[test]
+    fn test_reprofile_method() {
+        let peaks = prepare_peaks();
+
+        let grid = PeakSetReprofiler::new(
+            X.first().copied().unwrap() - 3.0,
+            X.last().copied().unwrap() + 3.0,
+            0.01,
+        );
+
+        let pair = grid.reprofile(peaks.as_slice());
+
+        eprintln!("{} {}", pair.min_mz, pair.max_mz);
+        let peaks2 = pick_peaks(&pair.mz_array, &pair.intensity_array).unwrap();
+        assert_eq!(peaks2.len(), 32);
+        let p1 = peaks
+            .iter()
+            .max_by(|a, b| a.intensity.total_cmp(&b.intensity))
+            .unwrap();
+        let p2 = peaks2
+            .iter()
+            .max_by(|a, b| a.intensity.total_cmp(&b.intensity))
+            .unwrap();
+
+        assert!(
+            (p1.mz - p2.mz).abs() < 1e-3,
+            "{} - {} = {}",
+            p1.mz,
+            p2.mz,
+            p1.mz - p2.mz
+        )
+    }
+
+    #[test]
+    fn test_reprofile_from_centroids() {
+        let peaks = prepare_peaks();
+
+        let grid = PeakSetReprofiler::new(
+            X.first().copied().unwrap() - 3.0,
+            X.last().copied().unwrap() + 3.0,
+            0.001,
+        );
+
+        let pair = grid.reprofile_from_centroids(&peaks, 0.005);
+
+        eprintln!("{} {}", pair.min_mz, pair.max_mz);
+        let peaks2 = pick_peaks(&pair.mz_array, &pair.intensity_array).unwrap();
+        assert_eq!(peaks2.len(), 37);
+        let p1 = peaks
+            .iter()
+            .max_by(|a, b| a.intensity.total_cmp(&b.intensity))
+            .unwrap();
+        let p2 = peaks2
+            .iter()
+            .max_by(|a, b| a.intensity.total_cmp(&b.intensity))
+            .unwrap();
+
+        assert!(
+            (p1.mz - p2.mz).abs() < 1e-3,
+            "{} - {} = {}",
+            p1.mz,
+            p2.mz,
+            p1.mz - p2.mz
+        )
+    }
+
+    #[test]
+    fn test_top_level() -> () {
+        let peaks = prepare_peaks();
         assert_eq!(peaks.len(), 37);
+
         let iterator = peaks.iter();
         let pair = reprofile(iterator, 0.01);
-        // text::arrays_to_file(pair.borrow(), "reprofiled_avx.txt").unwrap();
+
         eprintln!("{} {}", pair.min_mz, pair.max_mz);
         let peaks2 = pick_peaks(&pair.mz_array, &pair.intensity_array).unwrap();
         assert_eq!(peaks2.len(), 32);
