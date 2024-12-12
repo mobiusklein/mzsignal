@@ -1,5 +1,8 @@
 use num_traits::{Float, FromPrimitive, ToPrimitive, Zero};
 
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
+
 use crate::arrayops::minmax;
 
 pub fn percentile<T: Float + ToPrimitive>(values: &[T], percent: f64) -> T {
@@ -28,6 +31,7 @@ pub fn sturges_bin_width<T: Float + ToPrimitive>(values: &[T]) -> f64 {
 }
 
 #[derive(Default, Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Histogram<T: Float + Default + FromPrimitive> {
     pub bin_count: Vec<usize>,
     pub bin_edges: Vec<T>,
@@ -40,8 +44,7 @@ impl<T: Float + Default + FromPrimitive> Histogram<T> {
         hist
     }
 
-    pub fn new_freedman_diaconis(values: &[T]) -> Histogram<T> {
-        let width = freedman_diaconis_bin_width(values);
+    fn from_values_and_width(values: &[T], width: f64) -> Self {
         if width.is_zero() {
             return Histogram::new(values, 1)
         }
@@ -50,14 +53,14 @@ impl<T: Float + Default + FromPrimitive> Histogram<T> {
         Self::new(values, bins)
     }
 
+    pub fn new_freedman_diaconis(values: &[T]) -> Histogram<T> {
+        let width = freedman_diaconis_bin_width(values);
+        Self::from_values_and_width(values, width)
+    }
+
     pub fn new_sturges(values: &[T]) -> Histogram<T> {
         let width = sturges_bin_width(values);
-        if width.is_zero() {
-            return Histogram::new(values, 1)
-        }
-        let (min, max) = minmax(values);
-        let bins = ((max - min).to_f64().unwrap() / width).to_usize().unwrap() + 1;
-        Self::new(values, bins)
+        Self::from_values_and_width(values, width)
     }
 
     pub fn clear(&mut self) {
@@ -105,5 +108,34 @@ impl<T: Float + Default + FromPrimitive> Histogram<T> {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::gridspace;
+
+    use super::*;
+
+    #[test]
+    fn test_fd() {
+        let xval = gridspace(0.0, 10.5, 0.5);
+        let width = freedman_diaconis_bin_width(&xval);
+        let err = width - 3.6246012433429744;
+        assert!(err.abs() < 1e-3, "{width} off by {err}");
+
+        let hist = Histogram::new_freedman_diaconis(&xval);
+        assert_eq!(hist.len(), 3);
+    }
+
+    #[test]
+    fn test_sturges() {
+        let xval = gridspace(0.0, 10.5, 0.5);
+        let width = sturges_bin_width(&xval);
+        let err = width - 2.2424382421757545;
+        assert!(err.abs() < 1e-3, "{width} off by {err}");
+
+        let hist = Histogram::new_sturges(&xval);
+        assert_eq!(hist.len(), 5);
     }
 }
