@@ -3,6 +3,9 @@ t:
 
 alias test := t
 
+test-coverage:
+    cargo llvm-cov nextest --lib --tests --html
+
 changelog tag:
     git cliff -t {{tag}} -o CHANGELOG.md
 
