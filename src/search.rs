@@ -53,62 +53,62 @@ pub fn nearest_right<T: Float>(vec: &[T], target_val: T, start_index: usize) -> 
     nearest_index
 }
 
-pub fn nearest_binary<T: Float>(
-    vec: &[T],
-    target_val: T,
-    start_index: usize,
-    stop_index: usize,
-) -> usize {
-    let mut start_index = start_index;
-    let mut stop_index = stop_index;
+// pub fn nearest_binary<T: Float>(
+//     vec: &[T],
+//     target_val: T,
+//     start_index: usize,
+//     stop_index: usize,
+// ) -> usize {
+//     let mut start_index = start_index;
+//     let mut stop_index = stop_index;
 
-    let cval = vec[start_index];
-    if cval > target_val {
-        return start_index;
-    }
-    loop {
-        let min_val = vec[start_index];
-        let max_val = vec[stop_index];
-        if (stop_index as isize - start_index as isize) <= 1 && (target_val >= min_val) && (target_val <= max_val) {
-            if (min_val - target_val).abs() < (max_val - target_val).abs() {
-                return start_index;
-            } else {
-                return stop_index;
-            }
-        }
-        let ratio =
-            (max_val - target_val).to_f64().unwrap() / (max_val - min_val).to_f64().unwrap();
-        // Interpolation search
-        let mut mid_index = (start_index as f64 * ratio + stop_index as f64 * (1.0 - ratio)) as usize;
-        if mid_index >= vec.len() {
-            mid_index = stop_index - 1;
-        }
-        let mid_val = vec[mid_index];
+//     let cval = vec[start_index];
+//     if cval > target_val {
+//         return start_index;
+//     }
+//     loop {
+//         let min_val = vec[start_index];
+//         let max_val = vec[stop_index];
+//         if (stop_index as isize - start_index as isize) <= 1 && (target_val >= min_val) && (target_val <= max_val) {
+//             if (min_val - target_val).abs() < (max_val - target_val).abs() {
+//                 return start_index;
+//             } else {
+//                 return stop_index;
+//             }
+//         }
+//         let ratio =
+//             (max_val - target_val).to_f64().unwrap() / (max_val - min_val).to_f64().unwrap();
+//         // Interpolation search
+//         let mut mid_index = (start_index as f64 * ratio + stop_index as f64 * (1.0 - ratio)) as usize;
+//         if mid_index >= vec.len() {
+//             mid_index = stop_index - 1;
+//         }
+//         let mid_val = vec[mid_index];
 
-        // Binary search lower partition
-        if mid_val >= target_val {
-            stop_index = mid_index;
-        }
-        // Binary search hit end
-        else if mid_index + 1 == stop_index {
-            if (mid_val - target_val).abs() < (max_val - target_val).abs() {
-                return mid_index;
-            } else {
-                return stop_index;
-            }
-        } else {
-            let mid_next_val = vec[mid_index + 1];
-            // Close enough value, escape
-            if target_val >= mid_val && target_val <= mid_next_val {
-                if (target_val - mid_val) < (mid_next_val - mid_val) {
-                    return mid_index;
-                }
-                return mid_index + 1;
-            }
-            start_index = mid_index + 1;
-        }
-    }
-}
+//         // Binary search lower partition
+//         if mid_val >= target_val {
+//             stop_index = mid_index;
+//         }
+//         // Binary search hit end
+//         else if mid_index + 1 == stop_index {
+//             if (mid_val - target_val).abs() < (max_val - target_val).abs() {
+//                 return mid_index;
+//             } else {
+//                 return stop_index;
+//             }
+//         } else {
+//             let mid_next_val = vec[mid_index + 1];
+//             // Close enough value, escape
+//             if target_val >= mid_val && target_val <= mid_next_val {
+//                 if (target_val - mid_val) < (mid_next_val - mid_val) {
+//                     return mid_index;
+//                 }
+//                 return mid_index + 1;
+//             }
+//             start_index = mid_index + 1;
+//         }
+//     }
+// }
 
 pub fn nearest(vec: &[MZ], target_val: MZ, _start_index: usize) -> usize {
     let n = vec.len() - 1;
