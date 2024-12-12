@@ -630,13 +630,7 @@ impl<C: IndexedCoordinate<D> + IntensityMeasurement, D> FromIterator<(f64, PeakS
 {
     fn from_iter<T: IntoIterator<Item = (f64, PeakSetVec<C, D>)>>(iter: T) -> Self {
         let mut this = Self::default();
-        let mut last_time = f64::NEG_INFINITY;
-        for (time, peaks) in iter {
-            assert!(time > last_time);
-            last_time = time;
-            this.time_axis.push(time);
-            this.peak_table.push(peaks);
-        }
+        this._from_iter(iter);
         this
     }
 }
@@ -647,6 +641,16 @@ impl<D, C: IndexedCoordinate<D> + IntensityMeasurement> PeakMapState<C, D> {
         Self {
             time_axis,
             peak_table,
+        }
+    }
+
+    fn _from_iter<T: IntoIterator<Item = (f64, PeakSetVec<C, D>)>>(&mut self, iter: T) {
+        let mut last_time = f64::NEG_INFINITY;
+        for (time, peaks) in iter {
+            assert!(time > last_time);
+            last_time = time;
+            self.time_axis.push(time);
+            self.peak_table.push(peaks);
         }
     }
 }
@@ -793,24 +797,7 @@ impl<
     }
 
     fn populate_from_iterator(&mut self, it: impl Iterator<Item = (f64, PeakSetVec<C, D>)>) {
-        for (time, peaks) in it {
-            if let Some(t) = self.time_axis.last() {
-                assert!(*t < time);
-            }
-            self.time_axis.push(time);
-            self.peak_table.push(peaks);
-        }
-    }
-
-    fn query_with_index<'a>(
-        &'a self,
-        query: &'a C,
-        time_index: usize,
-        error_tolerance: Tolerance,
-    ) -> impl Iterator<Item = MapIndex> + 'a {
-        let hits = self.peak_table[time_index].all_peaks_for(query.coordinate(), error_tolerance);
-        hits.iter()
-            .map(move |p| MapIndex::new(time_index, p.get_index() as usize))
+        self._from_iter(it);
     }
 }
 
@@ -851,13 +838,7 @@ impl<
     }
 
     fn populate_from_iterator(&mut self, it: impl Iterator<Item = (f64, PeakSetVec<C, D>)>) {
-        for (time, peaks) in it {
-            if let Some(t) = self.time_axis.last() {
-                assert!(*t < time);
-            }
-            self.time_axis.push(time);
-            self.peak_table.push(peaks);
-        }
+        self._from_iter(it);
     }
 
     fn query_with_index<'a>(
@@ -903,6 +884,16 @@ impl<C: IndexedCoordinate<D> + IntensityMeasurement + KnownCharge, D> ChargedPea
             peak_table,
         }
     }
+
+    fn _from_iter<T: IntoIterator<Item = (f64, PeakSetVec<C, D>)>>(&mut self, iter: T) {
+        let mut last_time = f64::NEG_INFINITY;
+        for (time, peaks) in iter {
+            assert!(time > last_time);
+            last_time = time;
+            self.time_axis.push(time);
+            self.peak_table.push(peaks);
+        }
+    }
 }
 
 /// A [`ChargedPeakMapState`] can be built from an iterator, but it expects the iterator to be sorted over the time dimension, and
@@ -912,13 +903,7 @@ impl<C: IndexedCoordinate<D> + IntensityMeasurement + KnownCharge, D>
 {
     fn from_iter<T: IntoIterator<Item = (f64, PeakSetVec<C, D>)>>(iter: T) -> Self {
         let mut this = Self::default();
-        let mut last_time = f64::NEG_INFINITY;
-        for (time, peaks) in iter {
-            assert!(time > last_time);
-            last_time = time;
-            this.time_axis.push(time);
-            this.peak_table.push(peaks);
-        }
+        this._from_iter(iter);
         this
     }
 }
@@ -1269,7 +1254,7 @@ pub type DeconvolvedIMMSMapExtracter<C> = DeconvolvedFeatureExtracter<C, IonMobi
 
 #[cfg(test)]
 mod test {
-    use mzpeaks::{CentroidPeak, MZPeakSetType, Time};
+    use mzpeaks::{CentroidPeak, MZPeakSetType, Time, DeconvolutedPeak, DeconvolutedPeakSet};
 
     use super::*;
 
@@ -1341,6 +1326,32 @@ mod test {
                 }
             }
         }
+
+        eprintln!("Extracted {} features", features.len());
+        assert_eq!(features.len(), 15427);
+        Ok(())
+    }
+
+    #[test_log::test]
+    fn test_construction_charged() -> io::Result<()> {
+        let time_arrays = arrays_over_time_from_file("./test/data/peaks_over_time.txt")?;
+        let mut time_axis = Vec::new();
+        let mut peak_table = Vec::new();
+
+        for (t, row) in time_arrays {
+            time_axis.push(t);
+            let peaks: DeconvolutedPeakSet = row
+                .mz_array
+                .into_iter()
+                .zip(row.intensity_array.into_iter())
+                .map(|(mz, i)| DeconvolutedPeak::new(*mz, *i, 1, 0))
+                .collect();
+            peak_table.push(peaks);
+        }
+
+        let mut peak_map_builder =
+            DeconvolvedFeatureExtracter::<_, Time>::from_iter(time_axis.into_iter().zip(peak_table));
+        let features = peak_map_builder.extract_features(Tolerance::PPM(10.0), 3, 0.25);
 
         eprintln!("Extracted {} features", features.len());
         assert_eq!(features.len(), 15427);
