@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.0] - 2024-12-13
+
+### Added
+
+- Add `serde` feature support
+- Add code coverage
+
+### Changed
+
+- Change `PeakPickerBuilder` to be a consuming builder
+- Change `FittedPeak` default conversion from 0 to 0.005
+- Upgrade to `mzpeaks` 1.0.0
+
+### Fixed
+
+- Fix test dependencies
+
+### Removed
+
+- Remove `search::nearest_binary`
+
 ## [0.27.0] - 2024-11-10
 
 ### Fixed
@@ -115,6 +136,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Add feature extraction algorithm
 
+[1.0.0]: https://github.com/mobiusklein/mzsignal/compare/v0.27.0..v1.0.0
 [0.27.0]: https://github.com/mobiusklein/mzsignal/compare/v0.26.0..v0.27.0
 [0.26.0]: https://github.com/mobiusklein/mzsignal/compare/v0.25.0..v0.26.0
 [0.25.0]: https://github.com/mobiusklein/mzsignal/compare/v0.24.0..v0.25.0
