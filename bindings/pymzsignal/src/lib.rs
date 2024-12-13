@@ -154,7 +154,10 @@ impl PeakCollection<PyFittedPeak, MZ> for PyPeakSet {
         self.0.search_by(query)
     }
 
-    fn iter(&self) -> impl Iterator<Item = &PyFittedPeak> {
+    fn iter<'a>(&'a self) -> impl Iterator<Item = &'a PyFittedPeak>
+    where
+        PyFittedPeak: 'a,
+    {
         self.0.iter()
     }
 }
@@ -383,13 +386,13 @@ fn py_pick_peaks(
     let intensity_array_ref = intensity_array.as_slice()?;
 
     let mut acc = Vec::new();
-    let peaks_res = py.allow_threads(|| {
-        picker.discover_peaks(mz_array_ref, intensity_array_ref, &mut acc)
-    });
+    let peaks_res =
+        py.allow_threads(|| picker.discover_peaks(mz_array_ref, intensity_array_ref, &mut acc));
 
     match peaks_res {
         Ok(_) => {
-            let pypeaks: Vec<PyFittedPeak> = py.allow_threads(||{acc.into_iter().map(|p| PyFittedPeak(p)).collect()});
+            let pypeaks: Vec<PyFittedPeak> =
+                py.allow_threads(|| acc.into_iter().map(|p| PyFittedPeak(p)).collect());
             return Ok(PyPeakSet::new(pypeaks));
         }
         Err(err) => match err {
@@ -440,7 +443,8 @@ fn py_moving_average(
         new_intensity
     });
 
-    let new_py_intensity_array: Py<PyArray<f32, Dim<[usize; 1]>>> = new_intensity.to_pyarray_bound(py).unbind();
+    let new_py_intensity_array: Py<PyArray<f32, Dim<[usize; 1]>>> =
+        new_intensity.to_pyarray_bound(py).unbind();
     Ok(new_py_intensity_array)
 }
 
@@ -456,12 +460,7 @@ fn py_savitsky_golay(
 ) -> PyResult<Py<PyArray<f32, Dim<[usize; 1]>>>> {
     let intensity_array_ = intensity_array.as_slice()?;
     let res = py.allow_threads(|| {
-        savitsky_golay::<f32>(
-            intensity_array_,
-            window_length,
-            poly_order,
-            derivative,
-        )
+        savitsky_golay::<f32>(intensity_array_, window_length, poly_order, derivative)
     });
     let res = match res {
         Ok(arr) => arr,

@@ -146,7 +146,7 @@ pub mod graph {
                 for (feature_index, f) in iter.skip(1) {
                     for (node_index, (x, y, z)) in f.iter().enumerate() {
                         if let Some(last) = acc.end_time() {
-                            if isclose(*y, last) {
+                            if isclose(y, last) {
                                 let e = y - last;
                                 log::warn!(
                                     "Attempted to add data point ({x}, {y}, {z}) from feature {feature_index} at \
@@ -155,8 +155,8 @@ pub mod graph {
                                 )
                             }
                         }
-                        acc.push_raw(*x, *y, *z);
-                        prev = (*x, *y, *z);
+                        acc.push_raw(x, y, z);
+                        prev = (x, y, z);
                     }
                 }
                 merged_nodes.push(acc);
@@ -530,7 +530,7 @@ pub mod graph {
                 self.feature.len()
             }
 
-            fn iter(&self) -> impl Iterator<Item = (&f64, &f64, &f32)> {
+            fn iter(&self) -> impl Iterator<Item = (f64, f64, f32)> {
                 self.feature.iter()
             }
         }
