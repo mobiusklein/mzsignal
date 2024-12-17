@@ -42,6 +42,7 @@ netlib = ["ndarray", "ndarray-linalg", "ndarray-linalg/netlib"]
 intel-mkl = ["ndarray", "ndarray-linalg", "ndarray-linalg/intel-mkl-static"]
 parallelism = ["rayon"]
 
+serde = ["dep:serde", "mzpeaks/serde"]
 avx = []
 
 [dependencies]

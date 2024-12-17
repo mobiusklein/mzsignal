@@ -55,6 +55,9 @@ use mzpeaks::{
     CentroidPeak, IonMobility, Mass, Time, Tolerance, MZ,
 };
 
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
+
 use crate::peak_statistics::isclose;
 use crate::search::nearest;
 
@@ -143,7 +146,7 @@ pub mod graph {
                 let mut iter = features_of.iter().enumerate();
                 let mut acc = (*iter.next().unwrap().1).clone();
                 let mut prev = acc.last().unwrap();
-                for (feature_index, f) in iter.skip(1) {
+                for (feature_index, f) in iter {
                     for (node_index, (x, y, z)) in f.iter().enumerate() {
                         if let Some(last) = acc.end_time() {
                             if isclose(y, last) {
@@ -287,6 +290,7 @@ pub mod graph {
     /// Describes a relationship between two features in some collection
     /// with static indices.
     #[derive(Debug, Default, Clone, Copy)]
+    #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
     pub struct FeatureLink {
         pub from_index: usize,
         pub to_index: usize,
@@ -545,6 +549,7 @@ pub mod map {
     /// Represents a coordinate in a [`PeakMapState`], referencing a specific peak
     /// at a specific time.
     #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
     pub struct MapIndex {
         /// The time index effectively refers to the row in [`PeakMapState::peak_table`]
         pub time_index: usize,
@@ -564,6 +569,7 @@ pub mod map {
     /// Connects two coordinates in a [`PeakMapState`], carrying some quality
     /// information about the linkage.
     #[derive(Debug, Default, Clone, Copy, PartialEq, PartialOrd)]
+    #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
     pub struct MapLink {
         pub from_index: MapIndex,
         pub to_index: MapIndex,
@@ -865,8 +871,10 @@ impl<
         }
 
         if let Some(link) = path.last() {
-            let peak = <ChargedPeakMapState<C, D> as MapState<C, D, T>>::peak_at(self, link.to_index);
-            let time = <ChargedPeakMapState<C, D> as MapState<C, D, T>>::time_axis(self)[link.to_index.time_index];
+            let peak =
+                <ChargedPeakMapState<C, D> as MapState<C, D, T>>::peak_at(self, link.to_index);
+            let time = <ChargedPeakMapState<C, D> as MapState<C, D, T>>::time_axis(self)
+                [link.to_index.time_index];
             if let Some(last) = feature.end_time() {
                 assert!(!isclose(time, last))
             }
@@ -911,6 +919,7 @@ impl<C: IndexedCoordinate<D> + IntensityMeasurement + KnownCharge, D>
 /// Represents a sequence of [`MapLink`] entries with a dynamic programming
 /// score.
 #[derive(Default, Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct MapPath {
     indices: Vec<MapLink>,
     pub coordinate: f64,
@@ -988,6 +997,33 @@ pub struct FeatureExtracterType<
     _t: PhantomData<T>,
 }
 
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub enum FeatureMappingEvent<'a> {
+    BeginTimeIndex(usize),
+    CreatedMapLinkingLayer {
+        index: usize,
+        peak: CentroidPeak,
+        links: std::borrow::Cow<'a, [MapLink]>,
+    },
+    BindingConstrainedLink {
+        link: MapLink,
+        path_coordinate: f64,
+        time_at: f64,
+        coordinate_at: f64,
+    },
+    CreatingPathFromLink {
+        link: MapLink,
+        path_coordinate: f64,
+        time_at: f64,
+        coordinate_at: f64,
+    },
+    CompletingPath {
+        path: std::borrow::Cow<'a, MapPath>,
+        reason: &'static str
+    }
+}
+
 impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
     FeatureExtracterType<S, C, D, T>
 {
@@ -1028,21 +1064,21 @@ impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
         let mut cells = MapCells::with_capacity(self.state.peak_table()[index].len());
         for peak in self.state.iter_at_index(index) {
             let from_index = MapIndex::new(index, peak.get_index() as usize);
-            cells.push(
-                self.state
-                    .query_with_index(&peak, index + 1, error_tolerance)
-                    .map(|to_index| {
-                        let peak_at = self.state.peak_at(to_index);
-                        let mass_error = error_tolerance
-                            .call(peak_at.coordinate(), peak.coordinate())
-                            .abs()
-                            / error_tolerance.tol();
-                        let intensity_weight =
-                            (peak.intensity().log10() + peak_at.intensity().log10()) / 2.0;
-                        MapLink::new(from_index, to_index, mass_error, intensity_weight)
-                    })
-                    .collect(),
-            );
+            let links: Vec<MapLink> = self
+                .state
+                .query_with_index(&peak, index + 1, error_tolerance)
+                .map(|to_index| {
+                    let peak_at = self.state.peak_at(to_index);
+                    let mass_error = error_tolerance
+                        .call(peak_at.coordinate(), peak.coordinate())
+                        .abs()
+                        / error_tolerance.tol();
+                    let intensity_weight =
+                        (peak.intensity().log10() + peak_at.intensity().log10()) / 2.0;
+                    MapLink::new(from_index, to_index, mass_error, intensity_weight)
+                })
+                .collect();
+            cells.push(links);
         }
         self.paths[index] = cells;
     }
@@ -1119,16 +1155,21 @@ impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
         seen_map_paths
     }
 
-    fn solve_layer_links_unbound(&self, link_weights: &mut Vec<(&MapLink, f32)>, seen_nodes: &mut HashSet<MapIndex>, working_paths: &mut Vec<MapPath>) {
-        link_weights.sort_by(|a, b| {
-            a.1.total_cmp(&b.1).reverse()
-        });
+    fn create_paths_from_unbound_links(
+        &self,
+        link_weights: &mut Vec<(&MapLink, f32)>,
+        seen_nodes: &mut HashSet<MapIndex>,
+        working_paths: &mut Vec<MapPath>,
+    ) {
+        link_weights.sort_by(|a, b| a.1.total_cmp(&b.1).reverse());
 
         for (link, weight) in link_weights.drain(..) {
+            // We've already visited this node, so we can't use it to build a new link
             if seen_nodes.contains(&link.to_index) {
                 continue;
             }
             seen_nodes.insert(link.to_index);
+            let path = self.init_path_from_link(link);
             if log::log_enabled!(log::Level::Trace) {
                 let time_at = self.state.time_axis()[link.to_index.time_index];
                 let peak_at = self.state.peak_at(link.to_index);
@@ -1138,7 +1179,6 @@ impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
                     peak_at.get_index()
                 );
             }
-            let path = self.init_path_from_link(link);
             working_paths.push(path);
         }
     }
@@ -1189,14 +1229,17 @@ impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
                 }
             }
 
-
             for links in row.iter() {
                 for link in links {
                     unbound_link_weights.push((link, link.score()))
                 }
             }
 
-            self.solve_layer_links_unbound(&mut unbound_link_weights, &mut seen_nodes, &mut working_paths);
+            self.create_paths_from_unbound_links(
+                &mut unbound_link_weights,
+                &mut seen_nodes,
+                &mut working_paths,
+            );
 
             swap(&mut active_paths, &mut working_paths);
             seen_nodes.clear();
@@ -1205,6 +1248,7 @@ impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
         }
 
         ended_paths.extend(active_paths);
+        ended_paths.sort_by(|a, b| a.coordinate.total_cmp(&b.coordinate));
         ended_paths
     }
 
@@ -1254,7 +1298,7 @@ pub type DeconvolvedIMMSMapExtracter<C> = DeconvolvedFeatureExtracter<C, IonMobi
 
 #[cfg(test)]
 mod test {
-    use mzpeaks::{CentroidPeak, MZPeakSetType, Time, DeconvolutedPeak, DeconvolutedPeakSet};
+    use mzpeaks::{CentroidPeak, DeconvolutedPeak, DeconvolutedPeakSet, MZPeakSetType, Time};
 
     use super::*;
 
@@ -1349,8 +1393,9 @@ mod test {
             peak_table.push(peaks);
         }
 
-        let mut peak_map_builder =
-            DeconvolvedFeatureExtracter::<_, Time>::from_iter(time_axis.into_iter().zip(peak_table));
+        let mut peak_map_builder = DeconvolvedFeatureExtracter::<_, Time>::from_iter(
+            time_axis.into_iter().zip(peak_table),
+        );
         let features = peak_map_builder.extract_features(Tolerance::PPM(10.0), 3, 0.25);
 
         eprintln!("Extracted {} features", features.len());
