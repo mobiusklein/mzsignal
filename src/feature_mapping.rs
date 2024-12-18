@@ -1329,13 +1329,7 @@ mod test {
             FeatureExtracter::<_, IonMobility>::from_iter(time_axis.into_iter().zip(peak_table));
         let features = peak_map_builder.extract_features(Tolerance::PPM(15.0), 3, 0.1);
         if false {
-            let mut writer = io::BufWriter::new(fs::File::create("features_graph_tims.txt")?);
-            writer.write_all(b"feature_id\tmz\trt\tintensity\n")?;
-            for (i, f) in features.iter().enumerate() {
-                for (mz, rt, inten) in f.iter() {
-                    writer.write_all(format!("{i}\t{mz}\t{rt}\t{inten}\n").as_bytes())?;
-                }
-            }
+            crate::text::write_feature_table("features_graph_tims.txt", features.iter())?;
         }
         Ok(())
     }
@@ -1362,13 +1356,7 @@ mod test {
         let features = peak_map_builder.extract_features(Tolerance::PPM(10.0), 3, 0.25);
 
         if false {
-            let mut writer = io::BufWriter::new(fs::File::create("features_graph.txt")?);
-            writer.write_all(b"feature_id\tmz\trt\tintensity\n")?;
-            for (i, f) in features.iter().enumerate() {
-                for (mz, rt, inten) in f.iter() {
-                    writer.write_all(format!("{i}\t{mz}\t{rt}\t{inten}\n").as_bytes())?;
-                }
-            }
+            crate::text::write_feature_table("feature_graph.txt", features.iter())?;
         }
 
         eprintln!("Extracted {} features", features.len());

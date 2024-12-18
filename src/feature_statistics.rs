@@ -137,6 +137,7 @@ impl SplittingPoint {
 
 /// Represent an array pair for signal-over-time data
 #[derive(Debug, Default, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct PeakFitArgs<'a, 'b> {
     /// The time axis of the signal
     pub time: Cow<'a, [f64]>,
@@ -598,7 +599,7 @@ impl Default for FitConfig {
     fn default() -> Self {
         Self {
             max_iter: 50_000,
-            learning_rate: 1e-3,
+            learning_rate: 1e-4,
             convergence: 1e-9,
             smooth: 0,
         }
@@ -1062,8 +1063,8 @@ impl SkewedGaussianPeakShape {
         let idx = data.argmax();
         let mu = data.time[idx];
         let amplitude = data.intensity[idx] as f64;
-        let sigma = 1.0;
-        let lambda = 1.0;
+        let sigma = 0.1;
+        let lambda = 0.1;
         Self::new(mu, sigma, amplitude, lambda)
     }
 
@@ -1394,7 +1395,7 @@ impl BiGaussianPeakShape {
         let idx = data.argmax();
         let mu = data.time[idx];
         let amplitude = data.intensity[idx] as f64;
-        let sigma = 1.0;
+        let sigma = 0.1;
         Self::new(mu, sigma, sigma, amplitude)
     }
 
@@ -1473,7 +1474,7 @@ impl BiGaussianPeakShape {
                         / sigma_low_cubed)
                     + 1.0;
 
-                gradient_amplitude += delta_y * neg_half_mu_sub_x_squared_div_sigma_low_squared_exp
+                gradient_amplitude += delta_y * 2.0 * neg_half_mu_sub_x_squared_div_sigma_low_squared_exp
             } else {
                 let neg_half_mu_sub_x_squared_div_sigma_high_squared =
                     neg_half_mu_sub_x_squared / sigma_high_squared;
@@ -1500,7 +1501,7 @@ impl BiGaussianPeakShape {
 
                 gradient_sigma_low += 1.0;
 
-                gradient_amplitude += delta_y * neg_half_mu_sub_x_squared_div_sigma_high_squared_exp
+                gradient_amplitude += delta_y * 2.0 * neg_half_mu_sub_x_squared_div_sigma_high_squared_exp
             }
         }
 
@@ -1683,6 +1684,7 @@ impl PeakShapeModel for BiGaussianPeakShape {
 
 /// Fit a single [`PeakShapeModel`] type
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct PeakShapeFitter<'a, 'b, T: PeakShapeModel + Debug> {
     pub data: PeakFitArgs<'a, 'b>,
     pub model: Option<T>,
@@ -2005,6 +2007,7 @@ impl MultiPeakShapeFit {
 /// This is preferred for "real world data" which may not be
 /// well behaved signal.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct SplittingPeakShapeFitter<'a, 'b> {
     pub data: PeakFitArgs<'a, 'b>,
     pub peak_fits: MultiPeakShapeFit,
@@ -2026,6 +2029,14 @@ impl<'a> SplittingPeakShapeFitter<'a, 'a> {
         let mut fits = Vec::new();
 
         let mut model = PeakShape::bigaussian(&chunk);
+        let fit_result = model.fit_with(chunk.borrow(), config.clone());
+        fits.push((model, fit_result));
+
+        let mut model = PeakShape::skewed_gaussian(&chunk);
+        let fit_result = model.fit_with(chunk.borrow(), config.clone());
+        fits.push((model, fit_result));
+
+        let mut model = PeakShape::gaussian(&chunk);
         let fit_result = model.fit_with(chunk.borrow(), config.clone());
         fits.push((model, fit_result));
 
@@ -2117,6 +2128,53 @@ mod test {
         };
     }
 
+    #[test_log::test]
+    fn test_fitted() {
+        let reader = io::BufReader::new(fs::File::open("test/data/fitted.csv").unwrap());
+        let mut times = Vec::new();
+        let mut intensities = Vec::new();
+
+        for line in reader.lines().skip(1).flatten() {
+            let parts: Vec<_> = line.split('\t').flat_map(|t| t.parse::<f64>()).collect();
+            let (time, _pred, observed, _smooth) = (parts[0], parts[1], parts[2], parts[3]);
+            times.push(time);
+            intensities.push(observed as f32);
+        }
+
+        let args: PeakFitArgs = PeakFitArgs::from((times, intensities));
+        let args = args.smooth(2);
+        let point = args.locate_extrema(None);
+        let split_points = args.split_at(point.as_slice());
+
+        let part0 = args.slice(split_points[0].clone());
+        let part1 = args.slice(split_points[1].clone());
+        eprintln!("{:?} {:?}", part0.get(0), part1.get(0));
+
+        let mut s0 = BiGaussianPeakShape::guess(&part0);
+        let mut s1 = BiGaussianPeakShape::guess(&part1);
+        let mut s2 = BiGaussianPeakShape::guess(&part0);
+
+        s0.fit(part0.borrow());
+        s2.fit_with(part0.borrow(), FitConfig::default().learning_rate(0.0001).max_iter(500_000));
+        s1.fit(part1.borrow());
+
+        let mut fitter = SplittingPeakShapeFitter::new(args.borrow());
+        fitter.fit_with(FitConfig::default().max_iter(500_000).smooth(3).learning_rate(0.0001));
+        eprintln!("{:?}", fitter.peak_fits);
+        eprintln!("Score {}", fitter.score());
+        let mut fits = vec![args.borrow()];
+        for fit in fitter.peak_fits.iter() {
+            let pred = fit.predict_iter(args.time.iter().copied()).map(|y| y as f32).collect();
+            fits.push(PeakFitArgs::from((args.time.to_vec(), pred)));
+        }
+
+        let pred = s2.predict_iter(args.time.iter().copied()).map(|y| y as f32).collect();
+        fits.push(PeakFitArgs::from((args.time.to_vec(), pred)));
+
+        // #[cfg(feature = "serde")]
+        // serde_json::to_writer(std::fs::File::create("fits.json").unwrap(), &fits).unwrap();
+    }
+
     #[rstest::rstest]
     #[test_log::test]
     fn test_fit_feature_14216(feature_table: &[Feature<MZ, Time>]) {
@@ -2129,10 +2187,10 @@ mod test {
         let mut model = SkewedGaussianPeakShape::guess(&args);
 
         let expected_gradient = SkewedGaussianPeakShape {
-            mu: 1.0877288990485208,
-            sigma: 2.066092153296829,
-            amplitude: 3421141.321363151,
-            lambda: 0.846178224318954,
+            mu: 0.7889935701777926,
+            sigma: -3.1315681149236436,
+            amplitude: 4768163.6022473359,
+            lambda: 0.055903399861434805,
         };
         let gradient = model.gradient(&args);
 
@@ -2146,9 +2204,9 @@ mod test {
 
         let expected = SkewedGaussianPeakShape {
             mu: 121.54820923262623,
-            sigma: 0.14392304906433506,
-            amplitude: 4768163.602247336,
-            lambda: 0.055903399861434805,
+            sigma: 0.12848403507034148,
+            amplitude: 5306530.5571324266,
+            lambda: 3.9754546220072966e-06,
         };
 
         assert_is_close!(expected.mu, model.mu, 1e-2, "mu");
@@ -2168,17 +2226,17 @@ mod test {
 
         let expected_fits = MultiPeakShapeFit {
             fits: vec![
-                PeakShape::BiGaussian(BiGaussianPeakShape {
-                    mu: 125.41112342515179,
-                    sigma_falling: 0.2130619068583823,
-                    sigma_rising: 0.22703724439718917,
-                    amplitude: 2535197.152987912,
+                PeakShape::SkewedGaussian(SkewedGaussianPeakShape {
+                    mu: 125.41578955563573,
+                    sigma: 0.21248682881868436,
+                    amplitude: 2647055.1373008243,
+                    lambda: 5.0754509933110766e-06
                 }),
                 PeakShape::BiGaussian(BiGaussianPeakShape {
-                    mu: 126.05807704271226,
-                    sigma_falling: 0.9997523697939726,
-                    sigma_rising: 1.1813146384558728,
-                    amplitude: 267102.87981724285,
+                    mu: 127.02011499003255,
+                    sigma_falling: 0.0036911613588913299,
+                    sigma_rising: 0.39590472685345912,
+                    amplitude: 258266.12588818953,
                 }),
             ],
         };
@@ -2226,16 +2284,16 @@ mod test {
         let expected_fits = MultiPeakShapeFit {
             fits: vec![
                 PeakShape::BiGaussian(BiGaussianPeakShape {
-                    mu: 125.23159261436803,
-                    sigma_falling: 0.3419458944098784,
-                    sigma_rising: 0.945137432308437,
-                    amplitude: 1277701.0773096785,
+                    mu: 125.23128153540236,
+                    sigma_falling: 0.31410976032960786,
+                    sigma_rising: 0.87223640914524792,
+                    amplitude: 1416726.7846651434,
                 }),
                 PeakShape::BiGaussian(BiGaussianPeakShape {
-                    mu: 127.25253895052438,
-                    sigma_falling: 0.09483862559250714,
-                    sigma_rising: 0.32453016302695475,
-                    amplitude: 487770.8422514298,
+                    mu: 127.25027802422561,
+                    sigma_falling: 0.072121481491421474,
+                    sigma_rising: 0.32629479391838795,
+                    amplitude: 494965.10971912777,
                 }),
             ],
         };
@@ -2266,8 +2324,8 @@ mod test {
         let _score = model.score(&args);
         // eprint!("{model:?}\n{_res:?}\n{_score}\n");
 
-        let mu = 123.44796615442881;
-        let sigma = 0.1015352963957489;
+        let mu = 123.44962935714317;
+        let sigma = 0.10674673407221102;
         // let amplitude = 629639.6468112208;
 
         assert!(

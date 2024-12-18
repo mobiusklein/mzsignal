@@ -7,6 +7,9 @@ use std::convert;
 
 use num_traits::{AsPrimitive, Float, ToPrimitive, Zero};
 
+#[cfg(feature = "serde")]
+use serde::{Deserialize, Serialize};
+
 /// Create an evenly spaced grid from `start` to `end`, with `step` between points
 pub fn gridspace<T: Float + ToPrimitive>(start: T, end: T, step: T) -> Vec<T> {
     let distance = end - start;
@@ -93,6 +96,7 @@ pub trait MZGrid {
 }
 
 #[derive(Debug, Default, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 /// Represent an m/z array and an intensity array with independent
 /// "borrowing" statuses using [`std::borrow::Cow`]. Adds a few helper
 /// methods.
@@ -316,6 +320,7 @@ impl<'lifespan> From<(Vec<f64>, Vec<f32>)> for ArrayPair<'lifespan> {
 }
 
 #[derive(Debug, Default, Clone)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 /// Represent an m/z array and an intensity array with independent
 /// "borrowing" statuses using [`std::borrow::Cow`]. Adds a few helper
 /// methods.

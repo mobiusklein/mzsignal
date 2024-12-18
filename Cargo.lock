@@ -1181,6 +1181,7 @@ dependencies = [
  "rayon",
  "rstest",
  "serde",
+ "serde_json",
  "test-log",
  "thiserror 1.0.69",
 ]
