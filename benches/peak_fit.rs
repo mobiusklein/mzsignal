@@ -14,7 +14,7 @@ fn bigaussian_fitting(c: &mut Criterion) {
         b.iter(|| init.gradient_split(&args))
     });
     c.bench_function("bigaussian_optimized", |b| {
-        b.iter(|| init.gradient(&args))
+        b.iter(|| init.gradient(&args, None))
     });
 }
 

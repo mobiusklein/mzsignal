@@ -1,5 +1,5 @@
 t:
-    cargo test -- --show-output --nocapture
+    cargo nextest run
 
 alias test := t
 
