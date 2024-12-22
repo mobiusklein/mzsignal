@@ -2,7 +2,6 @@ use std::f64::consts::{PI, SQRT_2};
 
 use libm::erf;
 
-use nalgebra::constraint;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
