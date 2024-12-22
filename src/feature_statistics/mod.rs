@@ -89,7 +89,6 @@ mod test {
     };
 
     use log::debug;
-    use multishapes::dispatch_peak;
     use mzpeaks::{feature::Feature, Time, MZ};
 
     use crate::gridspace;
@@ -128,100 +127,100 @@ mod test {
     }
 
     /*
-       #[test_log::test]
-       fn test_fitted() {
-           let reader = io::BufReader::new(fs::File::open("test/data/fitted.csv").unwrap());
-           let mut times = Vec::new();
-           let mut intensities = Vec::new();
+    #[test_log::test]
+    fn test_fitted() {
+        let reader = io::BufReader::new(fs::File::open("test/data/fitted.csv").unwrap());
+        let mut times = Vec::new();
+        let mut intensities = Vec::new();
 
-           for line in reader.lines().skip(1).flatten() {
-               let parts: Vec<_> = line.split('\t').flat_map(|t| t.parse::<f64>()).collect();
-               let (time, _pred, observed, _smooth) = (parts[0], parts[1], parts[2], parts[3]);
-               times.push(time);
-               intensities.push(observed as f32);
-           }
+        for line in reader.lines().skip(1).flatten() {
+            let parts: Vec<_> = line.split('\t').flat_map(|t| t.parse::<f64>()).collect();
+            let (time, _pred, observed, _smooth) = (parts[0], parts[1], parts[2], parts[3]);
+            times.push(time);
+            intensities.push(observed as f32);
+        }
 
-           let args: PeakFitArgs = PeakFitArgs::from((times, intensities));
-           let point = args.locate_extrema(None);
-           let split_points = args.split_at(point.as_slice());
+        let args: PeakFitArgs = PeakFitArgs::from((times, intensities));
+        let point = args.locate_extrema(None);
+        let split_points = args.split_at(point.as_slice());
 
-           let part0 = args.slice(split_points[0].clone());
-           let part1 = args.slice(split_points[1].clone());
-           eprintln!("{:?} {:?}", part0.get(0), part1.get(0));
+        let part0 = args.slice(split_points[0].clone());
+        let part1 = args.slice(split_points[1].clone());
+        eprintln!("{:?} {:?}", part0.get(0), part1.get(0));
 
-           let mut s1 = SkewedGaussianPeakShape::guess(&part1);
-           let mut s2 = BiGaussianPeakShape::guess(&part1);
-           eprintln!("{s1:?}\n{s2:?}");
+        let mut s1 = SkewedGaussianPeakShape::guess(&part1.smooth(3));
+        let mut s2 = BiGaussianPeakShape::guess(&part1.smooth(3));
+        eprintln!("{s1:?}\n{s2:?}");
 
-           s1.fit_with(
-               part1.borrow(),
-               FitConfig::default()
-                   .learning_rate(0.0001)
-                   .max_iter(50_000)
-                   .smooth(3)
-                   .splitting_threshold(0.2),
-           );
+        s1.fit_with(
+            part1.borrow(),
+            FitConfig::default()
+                .learning_rate(0.0001)
+                .max_iter(50_000)
+                .smooth(0)
+                .splitting_threshold(0.2),
+        );
 
-           s2.fit_with(
-               part1.borrow(),
-               FitConfig::default()
-                   .learning_rate(0.0001)
-                   .max_iter(50_000)
-                   .smooth(3)
-                   .splitting_threshold(0.2),
-           );
-           // s1.fit(part1.borrow());
+        s2.fit_with(
+            part1.borrow().smooth(3),
+            FitConfig::default()
+                .learning_rate(0.0001)
+                .max_iter(50_000)
+                .smooth(0)
+                .splitting_threshold(0.2),
+        );
+        // s1.fit(part1.borrow());
 
-           let mut fitter = SplittingPeakShapeFitter::new(args.borrow());
-           fitter.fit_with(
-               FitConfig::default()
-                   .max_iter(50_000)
-                   .smooth(3)
-                   .learning_rate(0.0001),
-           );
-           eprintln!("{:?}", fitter.peak_fits);
-           eprintln!("Score {}", fitter.score());
-           let mut fits = vec![
-               ("raw".to_string(), args.borrow(), None, None),
-               ("smoothed".to_string(), args.smooth(3), None, None),
-           ];
-           for (i, fit) in fitter.peak_fits.iter().enumerate() {
-               let pred = fit
-                   .predict_iter(args.time.iter().copied())
-                   .map(|y| y as f32)
-                   .collect();
-               fits.push((
-                   format!("fit_{i}"),
-                   PeakFitArgs::from((args.time.to_vec(), pred)),
-                   Some(fit.clone()),
-                   Some(fit.score(&args.smooth(3)))
-               ));
-           }
+        let mut fitter = SplittingPeakShapeFitter::new(args.borrow());
+        fitter.fit_with(
+            FitConfig::default()
+                .max_iter(50_000)
+                .smooth(3)
+                .learning_rate(0.0001),
+        );
+        eprintln!("{:?}", fitter.peak_fits);
+        eprintln!("Score {}", fitter.score());
+        let mut fits = vec![
+            ("raw".to_string(), args.borrow(), None, None),
+            ("smoothed".to_string(), args.smooth(3), None, None),
+        ];
+        for (i, fit) in fitter.peak_fits.iter().enumerate() {
+            let pred = fit
+                .predict_iter(args.time.iter().copied())
+                .map(|y| y as f32)
+                .collect();
+            fits.push((
+                format!("fit_{i}"),
+                PeakFitArgs::from((args.time.to_vec(), pred)),
+                Some(fit.clone()),
+                Some(fit.score(&args.smooth(3))),
+            ));
+        }
 
-           let pred = s2
-               .predict_iter(args.time.iter().copied())
-               .map(|y| y as f32)
-               .collect();
-           fits.push((
-               "S2_fit".into(),
-               PeakFitArgs::from((args.time.to_vec(), pred)),
-               Some(PeakShape::BiGaussian(s2)),
-               Some(s2.score(&args.smooth(3)))
-           ));
-           let pred = s1
-               .predict_iter(args.time.iter().copied())
-               .map(|y| y as f32)
-               .collect();
-           fits.push((
-               "S1_fit".into(),
-               PeakFitArgs::from((args.time.to_vec(), pred)),
-               Some(PeakShape::SkewedGaussian(s1)),
-               Some(s1.score(&args.smooth(3)))
-           ));
+        let pred = s2
+            .predict_iter(args.time.iter().copied())
+            .map(|y| y as f32)
+            .collect();
+        fits.push((
+            "S2_fit".into(),
+            PeakFitArgs::from((args.time.to_vec(), pred)),
+            Some(PeakShape::BiGaussian(s2)),
+            Some(s2.score(&args.smooth(3))),
+        ));
+        let pred = s1
+            .predict_iter(args.time.iter().copied())
+            .map(|y| y as f32)
+            .collect();
+        fits.push((
+            "S1_fit".into(),
+            PeakFitArgs::from((args.time.to_vec(), pred)),
+            Some(PeakShape::SkewedGaussian(s1)),
+            Some(s1.score(&args.smooth(3))),
+        ));
 
-           #[cfg(feature = "serde")]
-           serde_json::to_writer(std::fs::File::create("fits.json").unwrap(), &fits).unwrap();
-       }
+        #[cfg(feature = "serde")]
+        serde_json::to_writer(std::fs::File::create("fits.json").unwrap(), &fits).unwrap();
+    }
     */
 
     #[test]
@@ -369,11 +368,11 @@ mod test {
         eprintln!("Fits: {:?}", fitter.peak_fits);
 
         let expected_fits = MultiPeakShapeFit {
-            fits: vec![PeakShape::SkewedGaussian(SkewedGaussianPeakShape {
-                mu: 125.5729600516985,
-                sigma: 0.6837350208958329,
-                amplitude: 1292424.9033157062,
-                lambda: -5.015506330255452e-7,
+            fits: vec![PeakShape::BiGaussian(BiGaussianPeakShape {
+                mu: 125.15442379557763,
+                sigma_falling: 1.0523297795974058,
+                sigma_rising: 0.24321060937688804,
+                amplitude: 1375631.4353707798,
             })],
         };
 
@@ -609,7 +608,7 @@ mod test {
         );
 
         let mut fitter = SplittingPeakShapeFitter::new(args);
-        fitter.fit_with(FitConfig::default().max_iter(50_000));
+        fitter.fit_with(FitConfig::default().max_iter(10_000));
         let score = fitter.score();
         assert!(
             score > 0.95,

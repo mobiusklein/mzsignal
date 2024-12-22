@@ -102,6 +102,31 @@ impl<'c, 'd, 'a: 'c, 'b: 'd, 'e: 'c + 'd + 'a + 'b> PeakFitArgs<'a, 'b> {
         Self { time, intensity }
     }
 
+    pub fn duration(&self) -> f64 {
+        if self.time.is_empty() {
+            return 0.0
+        }
+        self.time.last().copied().unwrap() - self.time.first().copied().unwrap()
+    }
+
+    pub fn average_spacing(&self) -> f64 {
+        let (acc, wt, _last) = self.iter().fold((0.0, 0.0, Option::<f64>::None), |(acc, wt, last), (x, _y)| {
+            let diff = match last {
+                Some(last) => {
+                    x - last
+                },
+                None => {0.0}
+            };
+            (acc + diff, wt + 1.0, Some(x))
+        });
+        acc / wt
+    }
+
+    pub fn rebin(&self, dx: f64) -> PeakFitArgs {
+        let pair = crate::average::rebin(&self.time, &self.intensity, dx);
+        PeakFitArgs::new(pair.mz_array, pair.intensity_array)
+    }
+
     /// Apply [`moving_average_dyn`](crate::smooth::moving_average_dyn) to the signal intensity
     /// returning a new [`PeakFitArgs`].
     pub fn smooth(&'e self, window_size: usize) -> PeakFitArgs<'a, 'd> {

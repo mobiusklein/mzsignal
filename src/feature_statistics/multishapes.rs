@@ -147,6 +147,14 @@ impl PeakShapeModel for PeakShape {
     fn guess(args: &PeakFitArgs) -> Self {
         Self::BiGaussian(BiGaussianPeakShape::guess(args))
     }
+
+    fn loss(&self, data: &PeakFitArgs, constraints: Option<&FitConstraints>) -> f64 {
+        match self {
+            PeakShape::Gaussian(model) => PeakShapeModel::loss(model, data, constraints),
+            PeakShape::SkewedGaussian(model) => model.loss(data, constraints),
+            PeakShape::BiGaussian(model) => model.loss(data, constraints),
+        }
+    }
 }
 
 /// Represent a combination of multiple [`PeakShape`] models
@@ -210,3 +218,19 @@ impl MultiPeakShapeFit {
     }
 }
 
+
+impl Extend<PeakShape> for MultiPeakShapeFit {
+    fn extend<T: IntoIterator<Item = PeakShape>>(&mut self, iter: T) {
+        self.fits.extend(iter)
+    }
+}
+
+impl IntoIterator for MultiPeakShapeFit {
+    type Item = PeakShape;
+
+    type IntoIter = std::vec::IntoIter<PeakShape>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.fits.into_iter()
+    }
+}

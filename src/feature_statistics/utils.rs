@@ -3,6 +3,7 @@ use std::fmt::Debug;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
+use mzpeaks::coordinate::SimpleInterval;
 use super::{PeakFitArgs, PeakFitArgsIter};
 
 /// Hyperparameters for fitting a peak shape model
@@ -99,7 +100,7 @@ impl ModelFitResult {
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct FitConstraints {
-    pub center_boundaries: (f64, f64),
+    pub center_boundaries: SimpleInterval<f64>,
     pub width_boundary: f64,
     pub weight: f64,
 }
@@ -107,7 +108,7 @@ pub struct FitConstraints {
 impl Default for FitConstraints {
     fn default() -> Self {
         Self {
-            center_boundaries: (f64::NEG_INFINITY, f64::INFINITY),
+            center_boundaries: SimpleInterval::new(f64::NEG_INFINITY, f64::INFINITY),
             width_boundary: 0.05,
             weight: 0.1,
         }
@@ -117,7 +118,7 @@ impl Default for FitConstraints {
 impl FitConstraints {
     pub fn new(center_boundaries: (f64, f64), width_boundary: f64, weight: f64) -> Self {
         Self {
-            center_boundaries,
+            center_boundaries: SimpleInterval::new(center_boundaries.0, center_boundaries.1),
             width_boundary,
             weight,
         }
@@ -129,12 +130,12 @@ impl FitConstraints {
     }
 
     pub fn center_lower_bound(mut self, lower_bound: f64) -> Self {
-        self.center_boundaries.0 = lower_bound;
+        self.center_boundaries.start = lower_bound;
         self
     }
 
     pub fn center_upper_bound(mut self, upper_bound: f64) -> Self {
-        self.center_boundaries.1 = upper_bound;
+        self.center_boundaries.end = upper_bound;
         self
     }
 
@@ -163,7 +164,7 @@ pub trait PeakShapeModelFitter<'a, 'b> {
     ///
     /// # See also
     /// [`PeakShapeModel::loss`]
-    fn loss(&self, params: &Self::ModelType) -> f64;
+    fn loss(&self, params: &Self::ModelType, constraints: Option<&FitConstraints>) -> f64;
 
     /// Borrow the enclosed data
     fn data(&self) -> &PeakFitArgs;
@@ -226,12 +227,7 @@ pub trait PeakShapeModel: Clone {
     fn gradient(&self, data: &PeakFitArgs, constraints: Option<&FitConstraints>) -> Self;
 
     /// Compute the loss function for optimization, mean-squared error
-    fn loss(&self, data: &PeakFitArgs) -> f64 {
-        data.iter()
-            .map(|(t, i)| (i - self.density(t)).powi(2))
-            .sum::<f64>()
-            / data.len() as f64
-    }
+    fn loss(&self, data: &PeakFitArgs, _constraints: Option<&FitConstraints>) -> f64;
 
     /// Compute the difference between the observed signal and the theoretical signal,
     /// clamping the value to be non-negative

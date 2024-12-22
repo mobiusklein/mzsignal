@@ -440,6 +440,15 @@ mod test {
     use crate::test_data::{X, Y};
 
     #[test]
+    fn test_gridspace() {
+        let grid = gridspace(-4.0, 4.5, 0.5);
+        assert_eq!(grid[0], -4.0);
+        assert_eq!(grid[1], -3.5);
+        assert_eq!(grid.last().copied().unwrap(), 4.0);
+        assert_eq!(grid.len(), 17);
+    }
+
+    #[test]
     fn test_find() {
         let arrays = ArrayPair::wrap(&X, &Y);
         let i = arrays.find(179.0133881);

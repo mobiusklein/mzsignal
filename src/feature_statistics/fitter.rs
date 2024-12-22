@@ -3,8 +3,10 @@ use std::{borrow::Cow, fmt::Debug};
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
-use super::{FitConfig, FitConstraints, ModelFitResult, MultiPeakShapeFit, PeakFitArgs, PeakShape, PeakShapeModel, PeakShapeModelFitter};
-
+use super::{
+    FitConfig, FitConstraints, ModelFitResult, MultiPeakShapeFit, PeakFitArgs, PeakShape,
+    PeakShapeModel, PeakShapeModelFitter, SplittingPoint,
+};
 
 /// Fit a single [`PeakShapeModel`] type
 #[derive(Debug, Clone)]
@@ -27,8 +29,8 @@ impl<'a, 'b, T: PeakShapeModel + Debug> PeakShapeModelFitter<'a, 'b>
         params.gradient(&self.data, None)
     }
 
-    fn loss(&self, params: &Self::ModelType) -> f64 {
-        params.loss(&self.data)
+    fn loss(&self, params: &Self::ModelType, constraints: Option<&FitConstraints>) -> f64 {
+        params.loss(&self.data, constraints)
     }
 
     fn data(&self) -> &PeakFitArgs {
@@ -61,11 +63,11 @@ impl<'a, 'b, T: PeakShapeModel + Debug> PeakShapeModelFitter<'a, 'b>
             .width_boundary(end_t - start_t)
             .center_lower_bound(start_t)
             .center_upper_bound(end_t)
-            .weight(0.01);
+            .weight(0.1);
 
         for it in 0..config.max_iter {
             iters = it;
-            let loss = params.loss(&data);
+            let loss = params.loss(&data, Some(&constraints));
             let gradient = params.gradient(&data, Some(&constraints));
 
             log::trace!("{it}: Loss = {loss:0.3}: Gradient = {gradient:?}");
@@ -132,7 +134,6 @@ impl<'a, 'b, T: PeakShapeModel + Debug> PeakShapeFitter<'a, 'b, T> {
     }
 }
 
-
 pub trait FitPeaksOn<'a>
 where
     PeakFitArgs<'a, 'a>: From<&'a Self>,
@@ -158,7 +159,6 @@ impl<'a, X: 'a, Y: 'a> FitPeaksOn<'a> for mzpeaks::feature::SimpleFeature<X, Y> 
 impl<'a, X: 'a, Y: 'a> FitPeaksOn<'a> for mzpeaks::feature::SimpleFeatureView<'a, X, Y> {}
 impl<'a, X: 'a, Y: 'a> FitPeaksOn<'a> for mzpeaks::feature::ChargedFeature<X, Y> {}
 impl<'a, X: 'a, Y: 'a> FitPeaksOn<'a> for mzpeaks::feature::ChargedFeatureView<'a, X, Y> {}
-
 
 /// Fitter for multiple peak shapes on the signal split across
 /// multiple disjoint intervals.
@@ -206,8 +206,11 @@ impl<'a> SplittingPeakShapeFitter<'a, 'a> {
         (model, fit_result)
     }
 
-    fn split_then_fit(&self, data: PeakFitArgs<'a, 'a>, config: &FitConfig) -> MultiPeakShapeFit {
-        let mut peak_fits = Vec::new();
+    fn should_split(
+        &self,
+        data: PeakFitArgs<'a, 'a>,
+        config: &FitConfig,
+    ) -> (bool, Option<SplittingPoint>) {
         let threshold = data
             .intensity
             .get(data.argmax())
@@ -223,6 +226,18 @@ impl<'a> SplittingPeakShapeFitter<'a, 'a> {
             }
         });
         let chunks = data.split_at(partition_points.as_slice());
+        let should_split = chunks.iter().filter(|chunk| !(chunk.len() < 6)).count() > 1;
+        (should_split, partition_points)
+    }
+
+    fn split_then_fit(
+        &self,
+        data: PeakFitArgs<'a, 'a>,
+        config: &FitConfig,
+        split_points: &[SplittingPoint],
+    ) -> MultiPeakShapeFit {
+        let mut peak_fits = Vec::new();
+        let chunks = data.split_at(split_points);
         for chunk in chunks {
             if chunk.len() < 6 {
                 continue;
@@ -247,7 +262,14 @@ impl<'a> SplittingPeakShapeFitter<'a, 'a> {
         };
 
         let (total_fit, fit_result) = self.fit_chunk_with(data.borrow(), &config);
-        let split_fits = self.split_then_fit(data.borrow(), &config);
+
+        let (should_split, partition_points) = self.should_split(data.borrow(), &config);
+        if !should_split {
+            self.peak_fits.push(total_fit);
+            return;
+        }
+
+        let split_fits = self.split_then_fit(data.borrow(), &config, partition_points.as_slice());
 
         let total_score = if fit_result.success {
             total_fit.score(&data)
@@ -260,7 +282,7 @@ impl<'a> SplittingPeakShapeFitter<'a, 'a> {
         if total_score > split_score {
             self.peak_fits.push(total_fit);
         } else {
-            self.peak_fits.fits.extend(split_fits.fits)
+            self.peak_fits.extend(split_fits)
         }
     }
 
