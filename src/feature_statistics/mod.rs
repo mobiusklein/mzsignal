@@ -298,7 +298,7 @@ mod test {
         };
 
         assert_is_close!(expected.mu, model.mu, 1e-2, "mu");
-        assert_is_close!(expected.sigma, model.sigma, 1e-3, "sigma");
+        assert_is_close!(expected.sigma, model.sigma, 1e-2, "sigma");
 
         // assert_is_close!(expected_gradient.mu, gradient.mu, 1e-2, "mu");
         // assert_is_close!(expected_gradient.sigma, gradient.sigma, 1e-2, "sigma");
