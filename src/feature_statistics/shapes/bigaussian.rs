@@ -93,7 +93,8 @@ impl BiGaussianPeakShape {
         }
     }
 
-    pub fn lagrangian_loss(&self, constraints: &FitConstraints) -> f64 {
+    /// Compute the Lagrangian term for the loss function
+    fn lagrangian_loss(&self, constraints: &FitConstraints) -> f64 {
         let sigma_bound = constraints.width_boundary;
         let mut loss = 0.0;
         if !constraints.center_boundaries.contains(&self.mu) {
@@ -105,7 +106,7 @@ impl BiGaussianPeakShape {
         if self.sigma_falling > sigma_bound {
             loss += self.amplitude.powi(2) * self.sigma_falling.powi(2);
         }
-        loss
+        constraints.weight * loss
     }
 
     pub fn loss(&self, data: &PeakFitArgs, constraints: Option<&FitConstraints>) -> f64 {
@@ -138,44 +139,57 @@ impl BiGaussianPeakShape {
         let sigma_rising_squared = sigma_rising.powi(2);
         let sigma_falling_squared = sigma_falling.powi(2);
 
-        data.iter().map(move |(x, _)| {
-            let d_sigma_rising = if mu >= x && sigma_rising > width_bound || sigma_rising < 0.0 {
-                2.0 * amp_squared * sigma_rising
-            } else {
-                0.0
-            };
+        let d_sigma_rising =  if sigma_rising > width_bound || sigma_rising < 0.0 {
+            2.0 * amp_squared * sigma_rising
+        } else {
+            0.0
+        };
 
-            let d_sigma_falling = if mu >= x && sigma_falling > width_bound || sigma_falling < 0.0 {
-                2.0 * amp_squared * sigma_falling
-            } else {
-                0.0
-            };
+        let d_sigma_falling = if sigma_falling > width_bound || sigma_falling < 0.0 {
+            2.0 * amp_squared * sigma_falling
+        }  else {
+            0.0
+        };
 
-            let d_amplitude = if !mu_bounds.contains(&mu) {
+        let d_amplitude_rising = if !mu_bounds.contains(&mu) {
                 2.0 * amp * mu_squared
             } else {
                 0.0
-            } + if mu >= x && sigma_falling > width_bound || sigma_falling < 0.0 {
-                2.0 * amp * sigma_falling_squared
-            } else {
-                0.0
-            } + if mu >= x && sigma_rising > width_bound || sigma_rising < 0.0 {
+            } + if sigma_rising > width_bound || sigma_rising < 0.0 {
                 2.0 * amp * sigma_rising_squared
             } else {
                 0.0
             };
 
-            let d_mu = if !mu_bounds.contains(&mu) {
+        let d_amplitude_falling = if !mu_bounds.contains(&mu) {
+                2.0 * amp * mu_squared
+            } else {
+                0.0
+            } + if sigma_falling > width_bound || sigma_falling < 0.0 {
+                2.0 * amp * sigma_falling_squared
+            } else {
+                0.0
+            };
+
+        let d_mu = if !mu_bounds.contains(&mu) {
                 2.0 * amp_squared * mu
             } else {
                 0.0
             };
 
-            (d_mu, d_sigma_rising, d_sigma_falling, d_amplitude)
+
+        data.iter().map(move |(x, _)| {
+            // Rising
+            if mu >= x {
+                (d_mu, d_sigma_rising, 0.0, d_amplitude_rising)
+            } else {
+                // Falling
+                (d_mu, 0.0, d_sigma_falling, d_amplitude_falling)
+            }
         })
     }
 
-    pub fn lagrangian(&self, data: &PeakFitArgs, constraints: &FitConstraints) -> Self {
+    fn gradient_lagrangian(&self, data: &PeakFitArgs, constraints: &FitConstraints) -> Self {
         let (mu_penalty, sigma_rising_penalty, sigma_falling_penalty, amplitude_penalty) = self
             .gradient_lagrangian_iter(data, constraints)
             .reduce(|acc, point| {
@@ -197,7 +211,7 @@ impl BiGaussianPeakShape {
     }
 
     /// Compute the regularization term for the loss function
-    pub fn regularization(&self) -> f64 {
+    fn regularization(&self) -> f64 {
         self.mu + self.sigma_falling + self.sigma_rising
     }
 
@@ -279,7 +293,7 @@ impl BiGaussianPeakShape {
         // Regularization
         let n = data.len() as f64;
         if let Some(constraints) = constraints {
-            let penalty = self.lagrangian(data, constraints);
+            let penalty = self.gradient_lagrangian(data, constraints);
             gradient_mu += constraints.weight * penalty.mu;
             gradient_amplitude += constraints.weight * penalty.amplitude;
             gradient_sigma_rising += constraints.weight * penalty.sigma_rising;

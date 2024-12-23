@@ -52,7 +52,8 @@ impl GaussianPeakShape {
         Self::new(mu, sigma, amplitude)
     }
 
-    pub fn lagrangian_loss(&self, constraints: &FitConstraints) -> f64 {
+    /// Compute the Lagrangian term for the loss function
+    fn lagrangian_loss(&self, constraints: &FitConstraints) -> f64 {
         let sigma_bound = constraints.width_boundary;
         let mut loss = 0.0;
         if !constraints.center_boundaries.contains(&self.mu) {
@@ -61,7 +62,7 @@ impl GaussianPeakShape {
         if self.sigma > sigma_bound {
             loss += self.amplitude.powi(2) * self.sigma.powi(2);
         }
-        loss
+        constraints.weight * loss
     }
 
     fn gradient_lagrangian_iter<'a>(
@@ -91,7 +92,7 @@ impl GaussianPeakShape {
         std::iter::repeat_n(d_lagrangian, data.len())
     }
 
-    pub fn lagrangian(&self, data: &PeakFitArgs, constraints: &FitConstraints) -> Self {
+    fn gradient_lagrangian(&self, data: &PeakFitArgs, constraints: &FitConstraints) -> Self {
         let (mu_penalty, sigma_penalty, amplitude_penalty) = self
             .gradient_lagrangian_iter(data, constraints)
             .reduce(|acc, point| (acc.0 + point.0, acc.1 + point.1, acc.2 + point.2))
@@ -100,7 +101,7 @@ impl GaussianPeakShape {
     }
 
     /// Compute the regularization term for the loss function
-    pub fn regularization(&self) -> f64 {
+    fn regularization(&self) -> f64 {
         self.mu + self.sigma
     }
 
@@ -174,7 +175,7 @@ impl GaussianPeakShape {
         let n = data.len() as f64;
 
         if let Some(constraints) = constraints {
-            let penalties = self.lagrangian(&data, constraints);
+            let penalties = self.gradient_lagrangian(&data, constraints);
             gradient_mu += constraints.weight * penalties.mu;
             gradient_sigma += constraints.weight * penalties.sigma;
             gradient_amplitude += constraints.weight * penalties.amplitude;

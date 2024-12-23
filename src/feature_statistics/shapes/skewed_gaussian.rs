@@ -87,7 +87,7 @@ impl SkewedGaussianPeakShape {
     }
 
     /// Compute the regularization term for the loss function
-    pub fn regularization(&self) -> f64 {
+    fn regularization(&self) -> f64 {
         self.mu + self.sigma + self.lambda
     }
 
