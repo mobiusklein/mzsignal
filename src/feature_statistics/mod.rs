@@ -47,25 +47,6 @@
 //!
 //!
 //! [peak_fit]: https://github.com/mobiusklein/mzsignal/blob/feature/argmin_shape_fit/doc/chromatogram.png?raw=true
-use std::{
-    borrow::Cow,
-    f64::consts::{PI, SQRT_2},
-    fmt::Debug,
-    iter::FusedIterator,
-    ops::{Deref, Range},
-};
-
-use libm::erf;
-
-#[cfg(feature = "serde")]
-use serde::{Deserialize, Serialize};
-
-use mzpeaks::prelude::TimeArray;
-
-use crate::{
-    arrayops::{trapz, ArrayPair, ArrayPairSplit},
-    peak_statistics::{fit_falling_side_width, fit_rising_side_width, full_width_at_half_max},
-};
 
 mod data;
 mod fitter;
@@ -77,21 +58,14 @@ pub use data::{PeakFitArgs, PeakFitArgsIter, SplittingPoint};
 pub use fitter::{FitPeaksOn, PeakShapeFitter, SplittingPeakShapeFitter};
 pub use multishapes::{MultiPeakShapeFit, PeakShape};
 pub use shapes::{BiGaussianPeakShape, GaussianPeakShape, SkewedGaussianPeakShape};
-pub use utils::{FitConfig, FitConstraints, ModelFitResult, PeakShapeModel, PeakShapeModelFitter};
+pub use utils::{FitConfig, FitConstraints, ModelFitResult, PeakShapeModel, PeakShapeModelFitter, FeatureTransform};
 
-use multishapes::dispatch_peak;
 
 #[cfg(test)]
 mod test {
-    use std::{
-        fs,
-        io::{self, prelude::*},
-    };
-
-    use log::debug;
     use mzpeaks::{feature::Feature, Time, MZ};
-
     use crate::gridspace;
+    use multishapes::dispatch_peak;
 
     use super::*;
 

@@ -4,8 +4,6 @@
 use std::cmp;
 use std::ops;
 
-use log::{debug, info};
-
 use thiserror::Error;
 
 use num_traits::Float;

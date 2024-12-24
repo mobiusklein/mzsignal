@@ -2,11 +2,10 @@
 //!
 use std::collections::VecDeque;
 use std::fmt::Debug;
-use std::marker::PhantomData;
-use std::ops::{Add, AddAssign, Sub, SubAssign};
+use std::ops::{AddAssign, SubAssign};
 
 use num_traits;
-use num_traits::{Float, FromPrimitive};
+use num_traits::Float;
 use thiserror::Error;
 
 #[derive(Debug, Clone)]
@@ -619,12 +618,9 @@ pub use ndarray_impl::savitsky_golay;
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::test_data::{NOISE, X, Y};
+    use crate::test_data::{NOISE, Y};
 
-    use std::{
-        fs,
-        io::{self, prelude::*},
-    };
+    use std::io::{self};
 
     #[cfg(feature = "nalgebra")]
     #[test]

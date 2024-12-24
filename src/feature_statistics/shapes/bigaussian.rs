@@ -1,14 +1,10 @@
-use std::f64::consts::{PI, SQRT_2};
-
-use libm::erf;
-
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
 use mzpeaks::prelude::Span1D;
 
 use crate::peak_statistics::{
-    fit_falling_side_width, fit_rising_side_width, full_width_at_half_max,
+    fit_falling_side_width, fit_rising_side_width
 };
 
 use super::{FitConstraints, PeakFitArgs, PeakShapeFitter, PeakShapeModel};

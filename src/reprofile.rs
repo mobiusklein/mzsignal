@@ -1,17 +1,15 @@
 //! Convert picked peaks into a profile spectrum.
 //!
-use std::borrow;
 use std::borrow::Cow;
 use std::cmp;
-use std::iter;
 
-#[cfg(target_arch = "x86")]
-use std::arch::x86::__m256d;
-#[cfg(target_arch = "x86_64")]
-use std::arch::x86_64::__m256d;
-#[cfg(not(any(target_arch = "x86_64", target_arch = "x86")))]
-#[derive(Clone, Copy)]
-struct __m256d();
+// #[cfg(target_arch = "x86")]
+// use std::arch::x86::__m256d;
+// #[cfg(target_arch = "x86_64")]
+// use std::arch::x86_64::__m256d;
+// #[cfg(not(any(target_arch = "x86_64", target_arch = "x86")))]
+// #[derive(Clone, Copy)]
+// struct __m256d();
 
 use mzpeaks::{
     CentroidLike, CoordinateLike, IndexType, IndexedCoordinate, IntensityMeasurement, MZ,
@@ -382,7 +380,6 @@ impl MZGrid for PeakSetReprofiler {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::arrayops::ArrayPair;
     use crate::peak_picker::pick_peaks;
     use crate::reprofile::reprofile;
     use crate::test_data::{NOISE, X, Y};

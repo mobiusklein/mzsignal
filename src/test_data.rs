@@ -1,5 +1,4 @@
 use std::fs;
-use std::fmt::Debug;
 use std::io;
 use std::io::prelude::*;
 use std::str::FromStr;

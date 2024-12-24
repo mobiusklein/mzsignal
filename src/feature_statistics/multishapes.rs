@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     BiGaussianPeakShape, FitConfig, FitConstraints, GaussianPeakShape, ModelFitResult, PeakFitArgs,
-    PeakShapeFitter, PeakShapeModel, SkewedGaussianPeakShape, PeakShapeModelFitter
+    PeakShapeFitter, PeakShapeModel, SkewedGaussianPeakShape
 };
 
 /// A dispatching peak shape model that can represent a variety of different

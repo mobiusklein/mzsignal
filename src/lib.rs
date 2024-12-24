@@ -78,7 +78,7 @@
 //!
 //! otherwise, the default `nalgebra` backend will be used.
 
-#![allow(unused_imports)]
+
 pub(crate) mod arrayops;
 pub mod average;
 pub mod denoise;

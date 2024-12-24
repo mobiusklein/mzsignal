@@ -1,13 +1,10 @@
-use std::cmp;
+
 use std::fmt;
-use std::hash;
 
 use mzpeaks;
 use mzpeaks::peak::MZPoint;
-use mzpeaks::prelude::*;
-use mzpeaks::CentroidPeak;
 use mzpeaks::{
-    CentroidLike, CoordinateLike, IndexType, IndexedCoordinate, IntensityMeasurement, MZ,
+    CentroidLike, CoordinateLike, IndexedCoordinate, IntensityMeasurement,
 };
 
 #[cfg(feature = "serde")]
@@ -119,6 +116,9 @@ impl fmt::Display for FittedPeak {
 #[cfg(test)]
 mod test {
     use super::*;
+    use mzpeaks::prelude::*;
+    use mzpeaks::CentroidPeak;
+
 
     #[test]
     fn test_conversion() {

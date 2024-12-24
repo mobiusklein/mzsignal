@@ -4,8 +4,6 @@
 use std::borrow::Cow;
 use std::cmp;
 use std::collections::VecDeque;
-use std::iter::Enumerate;
-use std::ops::{Add, Index};
 
 #[cfg(target_arch = "x86")]
 use std::arch::x86::__m256d;
@@ -24,8 +22,7 @@ use cfg_if;
 use mzpeaks::coordinate::{CoordinateLike, Time};
 
 use crate::arrayops::{gridspace, ArrayPair, ArrayPairIter, ArrayPairLike, ArrayPairSplit, MZGrid};
-use crate::search;
-use num_traits::{Float, Saturating, ToPrimitive};
+use num_traits::Float;
 
 trait MZInterpolator {
     /// Linear interpolation between two control points to find the intensity
@@ -76,6 +73,14 @@ trait MZInterpolator {
             _mm256_div_pd(vab, step_ab)
         }
     }
+}
+
+
+struct Interpolator {}
+impl MZInterpolator for Interpolator {}
+
+pub fn interpolate(xj: f64, x: f64, xj1: f64, yj: f64, yj1: f64) -> f64 {
+    Interpolator{}.interpolate_point(xj, x, xj1, yj, yj1)
 }
 
 struct MonotonicBlockSearcher<'a> {

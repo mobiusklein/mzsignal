@@ -2,10 +2,8 @@
 
 use std::borrow::Cow;
 use std::iter::Sum;
-use std::ops::{Add, Index};
-use std::convert;
 
-use num_traits::{AsPrimitive, Float, ToPrimitive, Zero};
+use num_traits::{AsPrimitive, Float, ToPrimitive};
 
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};

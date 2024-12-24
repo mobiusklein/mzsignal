@@ -1,9 +1,6 @@
 //! Remove local noise from a spectrum using the denoising algorithm from MasSpike.
 //!
 use std::ops;
-use std::slice;
-
-use num_traits::Float;
 use thiserror::Error;
 
 use crate::histogram::Histogram;
@@ -373,9 +370,7 @@ mod test {
     use crate::peak_picker::PeakPicker;
     use crate::test_data::{NOISE, X, Y};
 
-    use std::fs;
     use std::io;
-    use std::io::prelude::*;
 
     #[test]
     fn test_denoise() -> io::Result<()> {

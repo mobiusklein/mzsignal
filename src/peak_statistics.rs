@@ -580,11 +580,6 @@ pub fn lorentzian_fit(
 mod test {
     use super::*;
     use crate::gridspace;
-    use crate::test_data::{read_1col, read_cols};
-    use std::fs;
-    use std::io;
-    use std::io::prelude::*;
-
 
 
     #[test]
