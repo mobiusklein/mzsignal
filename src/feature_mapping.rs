@@ -38,21 +38,17 @@
 //! }
 //! ```
 //!
-use std::collections::{
-    hash_map::{Entry, HashMap},
-    HashSet, VecDeque,
-};
+use std::collections::HashSet;
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::mem::{self, swap};
-use std::ops::Index;
 
 use mzpeaks::{
     feature::{ChargedFeature, Feature},
     feature_map::FeatureMap,
     peak_set::PeakSetVec,
     prelude::*,
-    CentroidPeak, IonMobility, Mass, Time, Tolerance, MZ,
+    IonMobility, Mass, Time, Tolerance, MZ,
 };
 
 #[cfg(feature = "serde")]
@@ -64,6 +60,60 @@ use crate::search::nearest;
 /// Build graphs of features to bridge gaps in a feature map
 pub mod graph {
     use super::*;
+
+    struct FeatureMergeQueue<'a, D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone> {
+        accumulator: F,
+        features: &'a [&'a F],
+        indices: Vec<usize>,
+        _d: PhantomData<D>,
+        _t: PhantomData<T>,
+    }
+
+    impl<'a, D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone> FeatureMergeQueue<'a, D, T, F> {
+        fn from_vec(features: &'a [&'a F]) -> Self {
+            let mut acc = features[0].clone();
+            acc.clear();
+            let indices = vec![0; features.len()];
+            Self {
+                accumulator: acc,
+                features,
+                indices,
+                _d: PhantomData,
+                _t: PhantomData
+            }
+        }
+
+        fn merge(mut self) -> F {
+            while let Some((x, y, z)) = self.next_point() {
+                self.accumulator.push_raw(x, y, z);
+            }
+            self.accumulator
+        }
+
+        fn next_point(&mut self) -> Option<(f64, f64, f32)> {
+            let coords = self.indices.iter().copied().enumerate().zip(self.features).filter_map(|((f_idx, t_idx), f)| {
+                let pt = f.at(t_idx);
+                if let Some(pt) = pt {
+                    Some((f_idx, t_idx, pt))
+                } else {
+                    None
+                }
+            }).reduce(|(earliest_f_idx, earliest_t_idx, earliest_pt), (f_idx, t_idx, pt)| {
+                if pt.1 < earliest_pt.1 {
+                    (f_idx, t_idx, pt)
+                } else {
+                    (earliest_f_idx, earliest_t_idx, earliest_pt)
+                }
+            });
+
+            if let Some((f_idx, _, pt)) = coords {
+                self.indices[f_idx] += 1;
+                Some(pt)
+            } else {
+                None
+            }
+        }
+    }
 
     /// Merge [`FeatureLike`] entities which are within the same mass dimension
     /// error tolerance and within a certain time of one-another by constructing a graph, extracting
@@ -134,34 +184,40 @@ pub mod graph {
                 if component_indices.is_empty() {
                     continue;
                 }
-                let mut features_of: Vec<_> = component_indices
+                let features_of: Vec<_> = component_indices
                     .into_iter()
                     .map(|i| features.get_item(i))
                     .collect();
 
-                let n_features_of = features_of.len();
-                features_of
-                    .sort_by(|a, b| a.start_time().unwrap().total_cmp(&b.start_time().unwrap()));
+                let acc = if features_of.len() == 1 {
+                    features_of[0].clone()
+                } else {
+                    FeatureMergeQueue::from_vec(&features_of).merge()
+                };
 
-                let mut iter = features_of.iter().enumerate();
-                let mut acc = (*iter.next().unwrap().1).clone();
-                let mut prev = acc.last().unwrap();
-                for (feature_index, f) in iter {
-                    for (node_index, (x, y, z)) in f.iter().enumerate() {
-                        if let Some(last) = acc.end_time() {
-                            if isclose(y, last) {
-                                let e = y - last;
-                                log::warn!(
-                                    "Attempted to add data point ({x}, {y}, {z}) from feature {feature_index} at \
-                                    {node_index}, prev {prev:?} to feature ending at {:?} ({e}) with {n_features_of} features to merge",
-                                    f.at_time(last).unwrap()
-                                )
-                            }
-                        }
-                        acc.push_raw(x, y, z);
-                        prev = (x, y, z);
-                    }
-                }
+                // let n_features_of = features_of.len();
+                // features_of
+                //     .sort_by(|a, b| a.start_time().unwrap().total_cmp(&b.start_time().unwrap()));
+
+                // let mut iter = features_of.iter().enumerate();
+                // let mut acc = (*iter.next().unwrap().1).clone();
+                // let mut prev = acc.last().unwrap();
+                // for (feature_index, f) in iter {
+                //     for (node_index, (x, y, z)) in f.iter().enumerate() {
+                //         if let Some(last) = acc.end_time() {
+                //             if isclose(y, last) {
+                //                 let e = y - last;
+                //                 log::warn!(
+                //                     "Attempted to add data point ({x}, {y}, {z}) from feature {feature_index} at \
+                //                     {node_index}, prev {prev:?} to feature ending at {:?} ({e}) with {n_features_of} features to merge",
+                //                     f.at_time(last).unwrap()
+                //                 )
+                //             }
+                //         }
+                //         acc.push_raw(x, y, z);
+                //         prev = (x, y, z);
+                //     }
+                // }
                 merged_nodes.push(acc);
             }
 
@@ -997,33 +1053,6 @@ pub struct FeatureExtracterType<
     _t: PhantomData<T>,
 }
 
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
-pub enum FeatureMappingEvent<'a> {
-    BeginTimeIndex(usize),
-    CreatedMapLinkingLayer {
-        index: usize,
-        peak: CentroidPeak,
-        links: std::borrow::Cow<'a, [MapLink]>,
-    },
-    BindingConstrainedLink {
-        link: MapLink,
-        path_coordinate: f64,
-        time_at: f64,
-        coordinate_at: f64,
-    },
-    CreatingPathFromLink {
-        link: MapLink,
-        path_coordinate: f64,
-        time_at: f64,
-        coordinate_at: f64,
-    },
-    CompletingPath {
-        path: std::borrow::Cow<'a, MapPath>,
-        reason: &'static str
-    }
-}
-
 impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
     FeatureExtracterType<S, C, D, T>
 {
@@ -1303,10 +1332,7 @@ mod test {
     use super::*;
 
     use crate::text::arrays_over_time_from_file;
-    use std::{
-        fs,
-        io::{self, prelude::*},
-    };
+    use std::io::{self};
 
     #[test_log::test]
     fn test_construction2() -> io::Result<()> {
