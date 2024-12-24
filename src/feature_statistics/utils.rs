@@ -3,8 +3,8 @@ use std::fmt::Debug;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
-use mzpeaks::coordinate::SimpleInterval;
 use super::{PeakFitArgs, PeakFitArgsIter};
+use mzpeaks::coordinate::SimpleInterval;
 
 /// Hyperparameters for fitting a peak shape model
 #[derive(Debug, Clone)]
@@ -95,7 +95,6 @@ impl ModelFitResult {
         }
     }
 }
-
 
 #[derive(Debug, Clone, Copy)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -287,4 +286,60 @@ pub trait PeakShapeModel: Clone {
         let mut fitter = Self::Fitter::from_args(args);
         fitter.fit_model(self, config)
     }
+}
+
+pub trait FeatureTransform<X, Y>:
+    mzpeaks::feature::FeatureLike<X, Y>
+    + mzpeaks::feature::FeatureLikeMut<X, Y>
+    + mzpeaks::feature::TimeArray<Y>
+    + Clone
+{
+    fn smooth(&mut self, size: usize) {
+        let x = self.intensity_view();
+        let mut y = x.to_vec();
+        crate::smooth::moving_average_dyn(&x, &mut y, size);
+        self.iter_mut()
+            .zip(y.into_iter())
+            .for_each(|((_, _, intensity), val)| {
+                *intensity = val;
+            });
+    }
+
+    fn rebin(&self, dt: f64) -> Self {
+        let pair = crate::average::rebin(self.time_view(), self.intensity_view(), dt);
+        let mut dup = self.clone();
+        dup.clear();
+        if self.len() < 2 {
+            return dup;
+        }
+        let mut it = self.iter();
+        let mut current_point = it.next().unwrap();
+        let mut next_point = it.next().unwrap();
+        for (t, int) in pair.iter() {
+            if next_point.1 > t {
+                current_point = next_point;
+                next_point = it.next().unwrap();
+            }
+            let x = crate::average::interpolate(
+                current_point.1,
+                t,
+                next_point.1,
+                current_point.0,
+                next_point.0,
+            );
+            dup.push_raw(x, t, int);
+        }
+        dup
+    }
+}
+
+impl<
+        X,
+        Y,
+        T: mzpeaks::feature::FeatureLike<X, Y>
+            + mzpeaks::feature::FeatureLikeMut<X, Y>
+            + mzpeaks::feature::TimeArray<Y>
+            + Clone
+    > FeatureTransform<X, Y> for T
+{
 }
