@@ -59,16 +59,22 @@ impl<'a, 'b, T: PeakShapeModel + Debug> PeakShapeModelFitter<'a, 'b>
 
         let start_t = self.data.time.first().copied().unwrap_or_default();
         let end_t = self.data.time.last().copied().unwrap_or_default();
-        let constraints = FitConstraints::default()
-            .width_boundary(end_t - start_t)
+
+        let mut constraints = FitConstraints::default();
+        let mut constraints_ref = None;
+
+        if config.use_constraints {
+            constraints = constraints.width_boundary(end_t - start_t)
             .center_lower_bound(start_t)
             .center_upper_bound(end_t)
             .weight(0.1);
+            constraints_ref = Some(&constraints);
+        };
 
         for it in 0..config.max_iter {
             iters = it;
-            let loss = params.loss(&data, Some(&constraints));
-            let gradient = params.gradient(&data, Some(&constraints));
+            let loss = params.loss(&data, constraints_ref);
+            let gradient = params.gradient(&data, constraints_ref);
 
             log::trace!("{it}: Loss = {loss:0.3}: Gradient = {gradient:?}");
             params.gradient_update(gradient, config.learning_rate);

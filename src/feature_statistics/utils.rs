@@ -16,12 +16,15 @@ pub struct FitConfig {
     /// The minimum distance between the current loss and the previous loss at which to decide the model
     /// has converged
     pub convergence: f64,
-    /// How much smoothing to perform before fitting a peak model.
+    /// How much smoothing to perform before fitting a peak model. Not used by default.
     ///
     /// See [`PeakFitArgs::smooth`]
     pub smooth: usize,
 
     pub splitting_threshold: f32,
+
+    /// Whether or not to use constraints during the model fitting process. Not used by default.
+    pub use_constraints: bool,
 }
 
 impl FitConfig {
@@ -56,6 +59,12 @@ impl FitConfig {
         self.splitting_threshold = value;
         self
     }
+
+    /// Whether or not to use constraints during the model fitting process
+    pub fn use_constraints(mut self, value: bool) -> Self {
+        self.use_constraints = value;
+        self
+    }
 }
 
 impl Default for FitConfig {
@@ -66,6 +75,7 @@ impl Default for FitConfig {
             convergence: 1e-9,
             smooth: 0,
             splitting_threshold: 0.1,
+            use_constraints: false,
         }
     }
 }
