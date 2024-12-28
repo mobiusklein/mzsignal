@@ -533,10 +533,10 @@ mod test {
         assert_eq!(z, 4);
         // These numbers are spacing-dependent, but they are consistent
         let xs = [
-            180.06583809999938,
-            181.06583809999938,
-            182.06583809999938,
-            183.06583809999938,
+            180.0658781000008,
+            181.0658781000008,
+            182.0658781000008,
+            183.0658781000008,
         ];
         for (i, (peak, x)) in acc.iter().zip(xs.iter()).enumerate() {
             let mz = peak.mz;
