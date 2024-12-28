@@ -56,6 +56,11 @@ pub use state::{
     ChargeAwareFeatureMerger, ChargedPeakMapState,
 };
 
+#[doc(hidden)]
+pub mod graph {
+    pub use super::*;
+}
+
 /// Extracts features from a [`MapState`] type using dynamic programming.
 #[derive(Debug, Clone)]
 pub struct FeatureExtracterType<
