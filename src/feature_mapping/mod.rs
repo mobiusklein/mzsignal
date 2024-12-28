@@ -53,7 +53,8 @@ mod state;
 use map::*;
 pub use state::{
     FeatureGraphBuilder, MapState, PeakMapState, FeatureMerger,
-    ChargeAwareFeatureMerger, ChargedPeakMapState,
+    ChargeAwareFeatureMerger, ChargedPeakMapState, FeatureNode,
+    FeatureLink,
 };
 
 #[doc(hidden)]
