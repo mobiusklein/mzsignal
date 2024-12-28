@@ -506,7 +506,7 @@ pub fn lorentzian_fit(
 ) -> f64 {
     let amplitude = intensity_array[index] as f64;
     let mut v0 = mz_array[index];
-    let step = ((v0 - mz_array[index + 1]) / 100.0).abs();
+    let step = ((v0 - mz_array[index + 1]) / 500.0).abs();
 
     if index < 1 {
         return v0;
@@ -537,7 +537,7 @@ pub fn lorentzian_fit(
     );
     let mut last_error: f64 = f64::INFINITY;
 
-    for _ in 0..50 {
+    for _ in 0..250 {
         last_error = current_error;
         v0 += step;
         current_error = lorentzian_least_squares(
@@ -556,7 +556,7 @@ pub fn lorentzian_fit(
 
     current_error = last_error;
     v0 -= step;
-    for _ in 0..50 {
+    for _ in 0..250 {
         last_error = current_error;
         v0 -= step;
         current_error = lorentzian_least_squares(
