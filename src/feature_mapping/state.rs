@@ -102,6 +102,12 @@ pub trait MapState<C: IndexedCoordinate<D> + IntensityMeasurement + 'static, D: 
         self.peak_table()[time_index].iter()
     }
 
+    fn iter_all_nodes(&self) -> impl Iterator<Item = MapIndex> + '_ {
+        self.peak_table().iter().enumerate().map(|(i, ps)| {
+            (0..ps.len()).into_iter().map(move |j| MapIndex::new(i, j))
+        }).flatten()
+    }
+
     /// The change in absolute time between time indices `i` and `j`
     fn time_delta(&self, i: usize, j: usize) -> Option<f64> {
         let ti = self.time_axis().get(i);
@@ -151,6 +157,16 @@ pub trait MapState<C: IndexedCoordinate<D> + IntensityMeasurement + 'static, D: 
     /// Retrieve the peak at [`MapIndex`]
     fn peak_at(&self, index: MapIndex) -> &C {
         &self.peak_table()[index.time_index][index.peak_index]
+    }
+
+    /// Convert a single [`MapIndex`] into an instance of [`Self::FeatureType`],
+    /// usually representing an orphaned peak that had no links.
+    fn node_to_feature(&self, index: &MapIndex) -> Self::FeatureType {
+        let peak = self.peak_at(*index);
+        let time = self.time_axis()[index.time_index];
+        let mut feature = Self::FeatureType::default();
+        feature.push(peak, time);
+        feature
     }
 
     /// Convert a [`MapPath`] into an instance of [`Self::FeatureType`]
@@ -263,6 +279,15 @@ impl<
         hits.iter()
             .filter(|p| p.charge() == query.charge())
             .map(move |p| MapIndex::new(time_index, p.get_index() as usize))
+    }
+
+    fn node_to_feature(&self, index: &MapIndex) -> Self::FeatureType {
+        let peak = <ChargedPeakMapState<C, D> as MapState<C, D, T>>::peak_at(self, *index);
+        let time = <ChargedPeakMapState<C, D> as MapState<C, D, T>>::time_axis(self)[index.time_index];
+        let mut feature = Self::FeatureType::default();
+        feature.push(peak, time);
+        feature.charge = peak.charge();
+        feature
     }
 
     fn path_to_feature(&self, path: &MapPath) -> Self::FeatureType {

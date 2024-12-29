@@ -1,5 +1,7 @@
 //! Helper types for representing coordinates over a [`MapState`]
 
+use std::collections::{HashMap, HashSet};
+
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
@@ -20,6 +22,25 @@ impl MapIndex {
             time_index,
             peak_index,
         }
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+pub(crate) struct MapSet(HashMap<usize, HashSet<usize>>);
+
+impl MapSet {
+    pub(crate) fn insert(&mut self, index: &MapIndex) -> bool {
+        self.0
+            .entry(index.time_index)
+            .or_default()
+            .insert(index.peak_index)
+    }
+
+    pub(crate) fn contains(&self, index: &MapIndex) -> bool {
+        self.0
+            .get(&index.time_index)
+            .map(|s| s.contains(&index.peak_index))
+            .unwrap_or_default()
     }
 }
 
@@ -63,8 +84,6 @@ impl MapLink {
         self.intensity_weight * (1.0 - self.mass_error.powi(4) as f32)
     }
 }
-
-
 
 /// Represents a sequence of [`MapLink`] entries with a dynamic programming
 /// score.

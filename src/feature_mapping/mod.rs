@@ -52,9 +52,8 @@ mod state;
 
 use map::*;
 pub use state::{
-    FeatureGraphBuilder, MapState, PeakMapState, FeatureMerger,
-    ChargeAwareFeatureMerger, ChargedPeakMapState, FeatureNode,
-    FeatureLink,
+    ChargeAwareFeatureMerger, ChargedPeakMapState, FeatureGraphBuilder, FeatureLink, FeatureMerger,
+    FeatureNode, MapState, PeakMapState,
 };
 
 #[doc(hidden)]
@@ -109,11 +108,11 @@ impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
 
     fn build_index(&mut self, error_tolerance: Tolerance) {
         for i in 0..self.state.len().saturating_sub(1) {
-            self.process_time_index(i, error_tolerance)
+            self.paths[i] = self.process_time_at(i, error_tolerance);
         }
     }
 
-    fn process_time_index(&mut self, index: usize, error_tolerance: Tolerance) {
+    fn process_time_at(&self, index: usize, error_tolerance: Tolerance) -> Vec<Vec<MapLink>> {
         let mut cells = MapCells::with_capacity(self.state.peak_table()[index].len());
         for peak in self.state.iter_at_index(index) {
             let from_index = MapIndex::new(index, peak.get_index() as usize);
@@ -133,7 +132,7 @@ impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
                 .collect();
             cells.push(links);
         }
-        self.paths[index] = cells;
+        cells
     }
 
     fn init_path_from_link(&self, link: &MapLink) -> MapPath {
@@ -151,6 +150,13 @@ impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
         path.score += score;
     }
 
+    fn extract_orphan_nodes(&self, all_used_nodes: MapSet) -> impl Iterator<Item = S::FeatureType> + '_ {
+        self.state
+                .iter_all_nodes()
+                .filter(move |i| !all_used_nodes.contains(i))
+                .map(|i| self.state.node_to_feature(&i))
+    }
+
     /// Extract features from the peak map, connecting peaks whose `D` mass coordinate
     /// is within `error_tolerance` units of each other, of at least `min_length` points
     /// long, and having gaps of no more than `maximum_gap_size` `T` time units wide.
@@ -164,13 +170,15 @@ impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
         maximum_gap_size: f64,
     ) -> FeatureMap<D, T, S::FeatureType> {
         self.build_index(error_tolerance);
-        let paths = self.build_paths();
-        let features = self.paths_to_features(&paths, min_length);
+        let (paths, all_used_nodes) = self.build_paths();
+        let mut features = self.paths_to_features(&paths, min_length);
+        features.extend(self.extract_orphan_nodes(all_used_nodes));
         let features = FeatureMap::new(features);
-        let features = self
-            .state
-            .merge_features(&features, error_tolerance, maximum_gap_size);
-        features
+        let features =
+            self.state
+                .merge_features(&features, error_tolerance, maximum_gap_size);
+        // TODO: When viable to introduce a breaking change, push minimum length filter into `merge_features`
+        features.into_iter().filter(|f| f.len() >= min_length).collect()
     }
 
     fn solve_layer_links(
@@ -259,11 +267,13 @@ impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
         }
     }
 
-    fn build_paths(&self) -> Vec<MapPath> {
+    fn build_paths(&self) -> (Vec<MapPath>, MapSet) {
         let mut active_paths: Vec<MapPath> = Vec::new();
         let mut seen_nodes: HashSet<MapIndex> = HashSet::new();
         let mut ended_paths: Vec<MapPath> = Vec::new();
         let mut working_paths: Vec<MapPath> = Vec::new();
+
+        let mut all_used_nodes = MapSet::default();
 
         let mut segments: Vec<MapPath> = Vec::new();
         let mut unbound_link_weights: Vec<(&MapLink, f32)> = Vec::new();
@@ -326,6 +336,10 @@ impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
 
             self.check_for_duplicate_nodes(&working_paths);
 
+            for index in seen_nodes.drain() {
+                all_used_nodes.insert(&index);
+            }
+
             swap(&mut active_paths, &mut working_paths);
             seen_nodes.clear();
             index_link_weights.clear();
@@ -334,16 +348,14 @@ impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
 
         ended_paths.extend(active_paths);
         ended_paths.sort_by(|a, b| a.coordinate.total_cmp(&b.coordinate));
-        ended_paths
+        (ended_paths, all_used_nodes)
     }
 
     fn paths_to_features(&self, paths: &[MapPath], min_length: usize) -> Vec<S::FeatureType> {
-        // A `MapPath` of length n represents n + 1 links, and that's the length we're filtering on
-        let min_length_sub_1 = min_length.saturating_sub(1);
         paths
             .iter()
-            .filter(|p| p.len() > min_length_sub_1)
             .map(|path| self.state.path_to_feature(path))
+            .filter(|p| p.len() >= min_length)
             .collect()
     }
 }
@@ -391,6 +403,7 @@ mod test {
     use std::io::{self};
 
     #[test_log::test]
+    #[test_log(default_log_filter = "debug")]
     fn test_construction2() -> io::Result<()> {
         let time_arrays = arrays_over_time_from_file("./test/data/peaks_over_time_tims.txt")?;
         let mut time_axis = Vec::new();
@@ -409,14 +422,16 @@ mod test {
 
         let mut peak_map_builder =
             FeatureExtracter::<_, IonMobility>::from_iter(time_axis.into_iter().zip(peak_table));
-        let features = peak_map_builder.extract_features(Tolerance::PPM(15.0), 3, 0.1);
+        let features = peak_map_builder.extract_features(Tolerance::PPM(15.0), 3, 0.005);
         if false {
             crate::text::write_feature_table("features_graph_tims.txt", features.iter())?;
         }
+        assert_eq!(features.len(), 792);
         Ok(())
     }
 
     #[test_log::test]
+    #[test_log(default_log_filter = "debug")]
     fn test_construction() -> io::Result<()> {
         let time_arrays = arrays_over_time_from_file("./test/data/peaks_over_time.txt")?;
         let mut time_axis = Vec::new();
@@ -438,15 +453,16 @@ mod test {
         let features = peak_map_builder.extract_features(Tolerance::PPM(10.0), 3, 0.25);
 
         if false {
-            crate::text::write_feature_table("feature_graph.txt", features.iter())?;
+            crate::text::write_feature_table("feature_graph_expanded.txt", features.iter())?;
         }
 
         eprintln!("Extracted {} features", features.len());
-        assert_eq!(features.len(), 15428);
+        assert_eq!(features.len(), 25784);
         Ok(())
     }
 
     #[test_log::test]
+    #[test_log(default_log_filter = "debug")]
     fn test_construction_charged() -> io::Result<()> {
         let time_arrays = arrays_over_time_from_file("./test/data/peaks_over_time.txt")?;
         let mut time_axis = Vec::new();
@@ -469,7 +485,7 @@ mod test {
         let features = peak_map_builder.extract_features(Tolerance::PPM(10.0), 3, 0.25);
 
         eprintln!("Extracted {} features", features.len());
-        assert_eq!(features.len(), 15428);
+        assert_eq!(features.len(), 25784);
         Ok(())
     }
 }

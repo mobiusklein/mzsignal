@@ -63,7 +63,7 @@ serde = {version="1", features=["derive"], optional=true}
 rayon = { version = ">=1.8.0,<2.0" }
 rstest = "0.23.0"
 pretty_env_logger = "0.5.0"
-test-log = "0.2.16"
+test-log = { version = "0.2.16", features = ["unstable"] }
 criterion = { version = "0.5.1", features = [ "html_reports" ] }
 serde = {version="1", features=["derive"] }
 serde_json = "1.0.133"
