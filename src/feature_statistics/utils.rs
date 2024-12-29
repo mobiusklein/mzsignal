@@ -307,7 +307,7 @@ pub trait FeatureTransform<X, Y>:
     fn smooth(&mut self, size: usize) {
         let x = self.intensity_view();
         let mut y = x.to_vec();
-        crate::smooth::moving_average_dyn(&x, &mut y, size);
+        crate::smooth::moving_average_dyn(&x, &mut y, size * 3);
         self.iter_mut()
             .zip(y.into_iter())
             .for_each(|((_, _, intensity), val)| {
