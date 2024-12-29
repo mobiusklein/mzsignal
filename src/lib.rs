@@ -92,6 +92,7 @@ pub mod reprofile;
 pub mod search;
 pub mod text;
 pub mod feature_statistics;
+pub mod prelude;
 
 #[cfg(test)]
 mod test_data;
