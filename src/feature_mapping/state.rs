@@ -2,11 +2,11 @@ use std::marker::PhantomData;
 use std::mem;
 
 use mzpeaks::{
-    feature::{ChargedFeature, Feature},
+    feature::{ChargedFeature, ChargedFeatureWrapper, Feature, NDFeature, NDFeatureAdapter},
     feature_map::FeatureMap,
     peak_set::PeakSetVec,
     prelude::*,
-    Tolerance,
+    IonMobility, Mass, Time, Tolerance,
 };
 
 #[cfg(feature = "serde")]
@@ -71,7 +71,11 @@ impl<D, C: IndexedCoordinate<D> + IntensityMeasurement> PeakMapState<C, D> {
 pub trait MapState<C: IndexedCoordinate<D> + IntensityMeasurement + 'static, D: 'static, T> {
     /// The type of feature this map is eventually made of. Must implement [`FeatureLike`]
     /// and [`FeatureLikeMut`].
-    type FeatureType: FeatureLike<D, T> + Default + FeatureLikeMut<D, T> + Clone + PeakSeries<Peak = C>;
+    type FeatureType: FeatureLike<D, T>
+        + Default
+        + FeatureLikeMut<D, T>
+        + Clone
+        + PeakSeries<Peak = C>;
 
     /// The implementation of [`FeatureGraphBuilder`] to use with this map's [`MapState::FeatureType`]
     type FeatureMergerType: FeatureGraphBuilder<D, T, Self::FeatureType> + Default;
@@ -213,7 +217,9 @@ impl<
         C: IndexedCoordinate<D> + IntensityMeasurement + 'static,
         D: Default + 'static + Clone,
         T: Default + Clone,
-    > MapState<C, D, T> for PeakMapState<C, D> where Feature<D, T>: PeakSeries< Peak = C>
+    > MapState<C, D, T> for PeakMapState<C, D>
+where
+    Feature<D, T>: PeakSeries<Peak = C>,
 {
     type FeatureType = Feature<D, T>;
     type FeatureMergerType = FeatureMerger<D, T, Self::FeatureType>;
@@ -254,7 +260,9 @@ impl<
         C: IndexedCoordinate<D> + IntensityMeasurement + KnownCharge + 'static,
         D: Default + 'static + Clone,
         T: Default + Clone,
-    > MapState<C, D, T> for ChargedPeakMapState<C, D> where ChargedFeature<D, T>: PeakSeries<Peak=C>
+    > MapState<C, D, T> for ChargedPeakMapState<C, D>
+where
+    ChargedFeature<D, T>: PeakSeries<Peak = C>,
 {
     type FeatureType = ChargedFeature<D, T>;
     type FeatureMergerType = ChargeAwareFeatureMerger<D, T, Self::FeatureType>;
@@ -350,6 +358,172 @@ impl<C: IndexedCoordinate<D> + IntensityMeasurement + KnownCharge, D>
     }
 }
 
+/// A [`MapState`] implementation that restricts peak matches to only those which have
+/// the same charge state and have proximity in ion mobility.
+#[derive(Debug, Clone)]
+pub struct IonMobilityChargedPeakMapState<
+    C: IndexedCoordinate<D> + IntensityMeasurement + KnownCharge + IonMobilityLocated,
+    D,
+> {
+    pub time_axis: Vec<f64>,
+    pub peak_table: Vec<PeakSetVec<C, D>>,
+    pub ion_mobility_error_tolerance: f64,
+}
+
+impl<C: IndexedCoordinate<D> + IntensityMeasurement + KnownCharge + IonMobilityLocated, D>
+    IonMobilityChargedPeakMapState<C, D>
+{
+    pub fn new(
+        time_axis: Vec<f64>,
+        peak_table: Vec<PeakSetVec<C, D>>,
+        ion_mobility_error_tolerance: f64,
+    ) -> Self {
+        assert_eq!(time_axis.len(), peak_table.len());
+        Self {
+            time_axis,
+            peak_table,
+            ion_mobility_error_tolerance,
+        }
+    }
+
+    fn _from_iter<T: IntoIterator<Item = (f64, PeakSetVec<C, D>)>>(&mut self, iter: T) {
+        let mut last_time = f64::NEG_INFINITY;
+        for (time, peaks) in iter {
+            assert!(time > last_time);
+            last_time = time;
+            self.time_axis.push(time);
+            self.peak_table.push(peaks);
+        }
+    }
+}
+
+impl<
+        C: IndexedCoordinate<D> + IntensityMeasurement + KnownCharge + CoordinateLike<IonMobility>,
+        D,
+    > Default for IonMobilityChargedPeakMapState<C, D>
+{
+    fn default() -> Self {
+        Self {
+            time_axis: Default::default(),
+            peak_table: Default::default(),
+            ion_mobility_error_tolerance: 0.02,
+        }
+    }
+}
+
+impl<
+        C: IndexedCoordinate<D> + IntensityMeasurement + KnownCharge + CoordinateLike<IonMobility>,
+        D,
+    > FromIterator<(f64, PeakSetVec<C, D>)> for IonMobilityChargedPeakMapState<C, D>
+{
+    fn from_iter<T: IntoIterator<Item = (f64, PeakSetVec<C, D>)>>(iter: T) -> Self {
+        let mut this = Self::default();
+        this._from_iter(iter);
+        this
+    }
+}
+
+type ChargedIonMobilityFeature<Coord> = NDFeatureAdapter<
+    Coord,
+    (Coord, IonMobility),
+    Time,
+    ChargedFeatureWrapper<(Coord, IonMobility), Time, NDFeature<2, (Coord, IonMobility), Time>>,
+>;
+
+impl<
+        C: IndexedCoordinate<Mass>
+            + IntensityMeasurement
+            + KnownCharge
+            + 'static
+            + CoordinateLike<IonMobility>,
+    > MapState<C, Mass, Time> for IonMobilityChargedPeakMapState<C, Mass>
+where
+    ChargedIonMobilityFeature<Mass>: mzpeaks::feature::AsPeakIter<Peak = C>,
+    ChargedIonMobilityFeature<Mass>: mzpeaks::feature::BuildFromPeak<C>,
+    NDFeature<2, (Mass, IonMobility), Time>: mzpeaks::CoordinateLike<Mass>,
+{
+    type FeatureType = ChargedIonMobilityFeature<Mass>;
+    type FeatureMergerType = IonMobilityChargeAwareFeatureMerger<Mass, Self::FeatureType>;
+
+    fn time_axis(&self) -> &[f64] {
+        &self.time_axis
+    }
+
+    fn peak_table(&self) -> &[PeakSetVec<C, Mass>] {
+        &self.peak_table
+    }
+
+    fn populate_from_iterator(&mut self, it: impl Iterator<Item = (f64, PeakSetVec<C, Mass>)>) {
+        self._from_iter(it);
+    }
+
+    fn query_with_index<'a>(
+        &'a self,
+        query: &'a C,
+        time_index: usize,
+        error_tolerance: Tolerance,
+    ) -> impl Iterator<Item = MapIndex> + 'a {
+        let hits = self.peak_table[time_index].all_peaks_for(
+            <C as CoordinateLike<Mass>>::coordinate(query),
+            error_tolerance,
+        );
+        hits.iter()
+            .filter(|p| {
+                p.charge() == query.charge()
+                    && (p.ion_mobility() - query.ion_mobility()).abs()
+                        < self.ion_mobility_error_tolerance
+            })
+            .map(move |p| MapIndex::new(time_index, p.get_index() as usize))
+    }
+
+    fn node_to_feature(&self, index: &MapIndex) -> Self::FeatureType {
+        let peak = <IonMobilityChargedPeakMapState<C, Mass> as MapState<C, Mass, Time>>::peak_at(
+            self, *index,
+        );
+        let time =
+            <IonMobilityChargedPeakMapState<C, Mass> as MapState<C, Mass, Time>>::time_axis(self)
+                [index.time_index];
+        let mut feature = Self::FeatureType::default();
+        feature.push(peak, time);
+        *feature.as_mut().charge_mut() = peak.charge();
+        feature
+    }
+
+    fn path_to_feature(&self, path: &MapPath) -> Self::FeatureType {
+        let mut feature = Self::FeatureType::default();
+        for link in path.iter() {
+            let peak: &C =
+                <IonMobilityChargedPeakMapState<C, Mass> as MapState<C, Mass, Time>>::peak_at(
+                    self,
+                    link.from_index,
+                );
+            *feature.as_mut().charge_mut() = peak.charge();
+            let time =
+                <IonMobilityChargedPeakMapState<C, Mass> as MapState<C, Mass, Time>>::time_axis(
+                    self,
+                )[link.from_index.time_index];
+            feature.push_peak(peak, time);
+        }
+
+        if let Some(link) = path.last() {
+            let peak =
+                <IonMobilityChargedPeakMapState<C, Mass> as MapState<C, Mass, Time>>::peak_at(
+                    self,
+                    link.to_index,
+                );
+            let time =
+                <IonMobilityChargedPeakMapState<C, Mass> as MapState<C, Mass, Time>>::time_axis(
+                    self,
+                )[link.to_index.time_index];
+            if let Some(last) = feature.end_time() {
+                assert!(!isclose(time, last))
+            }
+            feature.push(peak, time);
+        }
+        feature
+    }
+}
+
 struct FeatureMergeQueue<'a, D, T, F: PeakSeries + Clone + FeatureLikeMut<D, T>> {
     accumulator: F,
     _features: &'a [&'a F],
@@ -394,78 +568,22 @@ impl<'a, D, T, F: PeakSeries + Clone + FeatureLikeMut<D, T>> FeatureMergeQueue<'
     }
 }
 
-/*
-struct FeatureMergeQueueGeneric<'a, D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone> {
-    accumulator: F,
-    features: &'a [&'a F],
-    indices: Vec<usize>,
-    _d: PhantomData<D>,
-    _t: PhantomData<T>,
-}
-
-impl<'a, D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone> FeatureMergeQueueGeneric<'a, D, T, F> {
-    fn from_vec(features: &'a [&'a F]) -> Self {
-        let mut acc = features[0].clone();
-        acc.clear();
-        let indices = vec![0; features.len()];
-        Self {
-            accumulator: acc,
-            features,
-            indices,
-            _d: PhantomData,
-            _t: PhantomData,
-        }
-    }
-
-    fn merge(mut self) -> F {
-        while let Some((x, y, z)) = self.next_point() {
-            self.accumulator.push_raw(x, y, z);
-        }
-        self.accumulator
-    }
-
-    fn next_point(&mut self) -> Option<(f64, f64, f32)> {
-        let coords = self
-            .indices
-            .iter()
-            .copied()
-            .enumerate()
-            .zip(self.features)
-            .filter_map(|((f_idx, t_idx), f)| {
-                let pt = f.at(t_idx);
-                if let Some(pt) = pt {
-                    Some((f_idx, t_idx, pt))
-                } else {
-                    None
-                }
-            })
-            .reduce(
-                |(earliest_f_idx, earliest_t_idx, earliest_pt), (f_idx, t_idx, pt)| {
-                    if pt.1 < earliest_pt.1 {
-                        (f_idx, t_idx, pt)
-                    } else {
-                        (earliest_f_idx, earliest_t_idx, earliest_pt)
-                    }
-                },
-            );
-
-        if let Some((f_idx, _, pt)) = coords {
-            self.indices[f_idx] += 1;
-            Some(pt)
-        } else {
-            None
-        }
-    }
-}
-*/
-
 /// Merge [`FeatureLike`] entities which are within the same mass dimension
 /// error tolerance and within a certain time of one-another by constructing a graph, extracting
 /// connected components, and stitch them together.
-pub trait FeatureGraphBuilder<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone + PeakSeries> {
-
+pub trait FeatureGraphBuilder<
+    D,
+    T,
+    F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone + PeakSeries,
+>
+{
     #[inline(always)]
-    fn features_close_in_time<'a>(&self, f: &IndexedFeature<'a, D, T, F>, c: &IndexedFeature<'a, D, T, F>, maximum_gap_size: f64) -> bool {
+    fn features_close_in_time<'a>(
+        &self,
+        f: &IndexedFeature<'a, D, T, F>,
+        c: &IndexedFeature<'a, D, T, F>,
+        maximum_gap_size: f64,
+    ) -> bool {
         let start_time = f.start_time().unwrap();
         let end_time = f.end_time().unwrap();
         let c_start = c.start_time().unwrap();
@@ -476,7 +594,11 @@ pub trait FeatureGraphBuilder<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> 
     }
 
     #[allow(unused)]
-    fn features_can_connect<'a>(&self, f: &IndexedFeature<'a, D, T, F>, c: &IndexedFeature<'a, D, T, F>) -> bool {
+    fn features_can_connect<'a>(
+        &self,
+        f: &IndexedFeature<'a, D, T, F>,
+        c: &IndexedFeature<'a, D, T, F>,
+    ) -> bool {
         true
     }
 
@@ -510,7 +632,9 @@ pub trait FeatureGraphBuilder<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> 
                 if f.index == c.index || c.is_empty() {
                     continue;
                 }
-                if self.features_close_in_time(f, c, maximum_gap_size) && self.features_can_connect(f, c) {
+                if self.features_close_in_time(f, c, maximum_gap_size)
+                    && self.features_can_connect(f, c)
+                {
                     edges.push(FeatureLink::new(f.index, c.index));
                 }
             }
@@ -574,8 +698,8 @@ pub struct FeatureMerger<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clo
     _f: PhantomData<F>,
 }
 
-impl<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone + PeakSeries> FeatureGraphBuilder<D, T, F>
-    for FeatureMerger<D, T, F>
+impl<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone + PeakSeries>
+    FeatureGraphBuilder<D, T, F> for FeatureMerger<D, T, F>
 {
 }
 
@@ -597,8 +721,47 @@ pub struct ChargeAwareFeatureMerger<
 impl<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone + KnownCharge + PeakSeries>
     FeatureGraphBuilder<D, T, F> for ChargeAwareFeatureMerger<D, T, F>
 {
-    fn features_can_connect<'a>(&self, f: &IndexedFeature<'a, D, T, F>, c: &IndexedFeature<'a, D, T, F>) -> bool {
+    fn features_can_connect<'a>(
+        &self,
+        f: &IndexedFeature<'a, D, T, F>,
+        c: &IndexedFeature<'a, D, T, F>,
+    ) -> bool {
         f.feature.charge() == c.feature.charge()
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct IonMobilityChargeAwareFeatureMerger<
+    D,
+    F: FeatureLike<D, Time>
+        + FeatureLikeMut<D, Time>
+        + Clone
+        + KnownCharge
+        + CoordinateLike<IonMobility>
+        + PeakSeries,
+> {
+    pub ion_mobility_error_tolerance: f64,
+    _f: PhantomData<(F, D)>,
+}
+
+impl<
+        D,
+        F: FeatureLike<D, Time>
+            + FeatureLikeMut<D, Time>
+            + Clone
+            + KnownCharge
+            + CoordinateLike<IonMobility>
+            + PeakSeries,
+    > FeatureGraphBuilder<D, Time, F> for IonMobilityChargeAwareFeatureMerger<D, F>
+{
+    fn features_can_connect<'a>(
+        &self,
+        f: &IndexedFeature<'a, D, Time, F>,
+        c: &IndexedFeature<'a, D, Time, F>,
+    ) -> bool {
+        f.feature.charge() == c.feature.charge()
+            && (f.feature.ion_mobility() - c.feature.ion_mobility()).abs()
+                < self.ion_mobility_error_tolerance
     }
 }
 

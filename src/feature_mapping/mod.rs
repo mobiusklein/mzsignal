@@ -47,14 +47,14 @@ use mzpeaks::{
     MZ,
 };
 
+mod feature_wrap;
 pub mod map;
 mod state;
-mod feature_wrap;
 
 use map::*;
 pub use state::{
     ChargeAwareFeatureMerger, ChargedPeakMapState, FeatureGraphBuilder, FeatureLink, FeatureMerger,
-    FeatureNode, MapState, PeakMapState,
+    FeatureNode, IonMobilityChargedPeakMapState, MapState, PeakMapState,
 };
 
 #[doc(hidden)]
@@ -100,6 +100,13 @@ impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
     /// Get a reference to the enclosed [`MapState`]
     pub fn inner(&self) -> &S {
         &self.state
+    }
+
+    /// Get a mutable reference ot the enclosed [`MapState`].
+    ///
+    /// Care must be taken not to invalidate the invariants.
+    pub fn as_mut(&mut self) -> &mut S {
+        &mut self.state
     }
 
     /// Drop associated dynamic programming table and retrieve the enclosed [`MapState`]
@@ -151,11 +158,14 @@ impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
         path.score += score;
     }
 
-    fn extract_orphan_nodes(&self, all_used_nodes: MapSet) -> impl Iterator<Item = S::FeatureType> + '_ {
+    fn extract_orphan_nodes(
+        &self,
+        all_used_nodes: MapSet,
+    ) -> impl Iterator<Item = S::FeatureType> + '_ {
         self.state
-                .iter_all_nodes()
-                .filter(move |i| !all_used_nodes.contains(i))
-                .map(|i| self.state.node_to_feature(&i))
+            .iter_all_nodes()
+            .filter(move |i| !all_used_nodes.contains(i))
+            .map(|i| self.state.node_to_feature(&i))
     }
 
     /// Extract features from the peak map, connecting peaks whose `D` mass coordinate
@@ -175,11 +185,14 @@ impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
         let mut features = self.paths_to_features(&paths, min_length);
         features.extend(self.extract_orphan_nodes(all_used_nodes));
         let features = FeatureMap::new(features);
-        let features =
-            self.state
-                .merge_features(&features, error_tolerance, maximum_gap_size);
+        let features = self
+            .state
+            .merge_features(&features, error_tolerance, maximum_gap_size);
         // TODO: When viable to introduce a breaking change, push minimum length filter into `merge_features`
-        features.into_iter().filter(|f| f.len() >= min_length).collect()
+        features
+            .into_iter()
+            .filter(|f| f.len() >= min_length)
+            .collect()
     }
 
     fn solve_layer_links(
@@ -394,14 +407,32 @@ pub type DeconvolvedLCMSMapExtracter<C> = DeconvolvedFeatureExtracter<C, Time>;
 /// A [`DeconvolvedFeatureExtracter`] over drift time
 pub type DeconvolvedIMMSMapExtracter<C> = DeconvolvedFeatureExtracter<C, IonMobility>;
 
+pub type DeconvolutedLCIMMSMapExtracter<C> =
+    FeatureExtracterType<IonMobilityChargedPeakMapState<C, Mass>, C, Mass, Time>;
+
 #[cfg(test)]
 mod test {
-    use mzpeaks::{CentroidPeak, DeconvolutedPeak, DeconvolutedPeakSet, MZPeakSetType, Time};
+    use mzpeaks::{
+        peak::IonMobilityAwareDeconvolutedPeak, CentroidPeak, DeconvolutedPeak,
+        DeconvolutedPeakSet, MZPeakSetType, Time,
+    };
 
     use super::*;
 
     use crate::text::arrays_over_time_from_file;
     use std::io::{self};
+
+    #[test_log::test]
+    #[test_log(default_log_filter = "debug")]
+    // This test doesn't actually do anything at run time, but it proves that this type
+    // collection works at build time.
+    fn test_lc_im_ms() -> io::Result<()> {
+        let mut extractor: DeconvolutedLCIMMSMapExtracter<IonMobilityAwareDeconvolutedPeak> =
+            DeconvolutedLCIMMSMapExtracter::new(IonMobilityChargedPeakMapState::default());
+        extractor.as_mut().ion_mobility_error_tolerance = 0.1;
+        extractor.extract_features(Tolerance::PPM(15.0), 2, 0.5);
+        Ok(())
+    }
 
     #[test_log::test]
     #[test_log(default_log_filter = "debug")]
