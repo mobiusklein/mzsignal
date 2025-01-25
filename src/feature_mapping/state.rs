@@ -71,7 +71,7 @@ impl<D, C: IndexedCoordinate<D> + IntensityMeasurement> PeakMapState<C, D> {
 pub trait MapState<C: IndexedCoordinate<D> + IntensityMeasurement + 'static, D: 'static, T> {
     /// The type of feature this map is eventually made of. Must implement [`FeatureLike`]
     /// and [`FeatureLikeMut`].
-    type FeatureType: FeatureLike<D, T> + Default + FeatureLikeMut<D, T> + Clone;
+    type FeatureType: FeatureLike<D, T> + Default + FeatureLikeMut<D, T> + Clone + PeakSeries<Peak = C>;
 
     /// The implementation of [`FeatureGraphBuilder`] to use with this map's [`MapState::FeatureType`]
     type FeatureMergerType: FeatureGraphBuilder<D, T, Self::FeatureType> + Default;
@@ -103,9 +103,11 @@ pub trait MapState<C: IndexedCoordinate<D> + IntensityMeasurement + 'static, D: 
     }
 
     fn iter_all_nodes(&self) -> impl Iterator<Item = MapIndex> + '_ {
-        self.peak_table().iter().enumerate().map(|(i, ps)| {
-            (0..ps.len()).into_iter().map(move |j| MapIndex::new(i, j))
-        }).flatten()
+        self.peak_table()
+            .iter()
+            .enumerate()
+            .map(|(i, ps)| (0..ps.len()).into_iter().map(move |j| MapIndex::new(i, j)))
+            .flatten()
     }
 
     /// The change in absolute time between time indices `i` and `j`
@@ -178,7 +180,7 @@ pub trait MapState<C: IndexedCoordinate<D> + IntensityMeasurement + 'static, D: 
             if let Some(last) = feature.end_time() {
                 assert!(!isclose(time, last))
             }
-            feature.push(peak, time);
+            feature.push_peak(peak, time);
         }
 
         if let Some(link) = path.last() {
@@ -211,7 +213,7 @@ impl<
         C: IndexedCoordinate<D> + IntensityMeasurement + 'static,
         D: Default + 'static + Clone,
         T: Default + Clone,
-    > MapState<C, D, T> for PeakMapState<C, D>
+    > MapState<C, D, T> for PeakMapState<C, D> where Feature<D, T>: PeakSeries< Peak = C>
 {
     type FeatureType = Feature<D, T>;
     type FeatureMergerType = FeatureMerger<D, T, Self::FeatureType>;
@@ -252,7 +254,7 @@ impl<
         C: IndexedCoordinate<D> + IntensityMeasurement + KnownCharge + 'static,
         D: Default + 'static + Clone,
         T: Default + Clone,
-    > MapState<C, D, T> for ChargedPeakMapState<C, D>
+    > MapState<C, D, T> for ChargedPeakMapState<C, D> where ChargedFeature<D, T>: PeakSeries<Peak=C>
 {
     type FeatureType = ChargedFeature<D, T>;
     type FeatureMergerType = ChargeAwareFeatureMerger<D, T, Self::FeatureType>;
@@ -283,7 +285,8 @@ impl<
 
     fn node_to_feature(&self, index: &MapIndex) -> Self::FeatureType {
         let peak = <ChargedPeakMapState<C, D> as MapState<C, D, T>>::peak_at(self, *index);
-        let time = <ChargedPeakMapState<C, D> as MapState<C, D, T>>::time_axis(self)[index.time_index];
+        let time =
+            <ChargedPeakMapState<C, D> as MapState<C, D, T>>::time_axis(self)[index.time_index];
         let mut feature = Self::FeatureType::default();
         feature.push(peak, time);
         feature.charge = peak.charge();
@@ -298,7 +301,7 @@ impl<
             feature.charge = peak.charge();
             let time = <ChargedPeakMapState<C, D> as MapState<C, D, T>>::time_axis(self)
                 [link.from_index.time_index];
-            feature.push(peak, time);
+            feature.push_peak(peak, time);
         }
 
         if let Some(link) = path.last() {
@@ -347,7 +350,52 @@ impl<C: IndexedCoordinate<D> + IntensityMeasurement + KnownCharge, D>
     }
 }
 
-struct FeatureMergeQueue<'a, D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone> {
+struct FeatureMergeQueue<'a, D, T, F: PeakSeries + Clone + FeatureLikeMut<D, T>> {
+    accumulator: F,
+    _features: &'a [&'a F],
+    streams: Vec<std::iter::Peekable<F::Iter<'a>>>,
+    _d: PhantomData<D>,
+    _t: PhantomData<T>,
+}
+
+impl<'a, D, T, F: PeakSeries + Clone + FeatureLikeMut<D, T>> FeatureMergeQueue<'a, D, T, F> {
+    fn from_vec(features: &'a [&'a F]) -> Self {
+        let mut acc = features[0].clone();
+        acc.clear();
+        let streams = features.iter().map(|f| f.iter_peaks().peekable()).collect();
+        Self {
+            accumulator: acc,
+            _features: features,
+            streams,
+            _d: PhantomData,
+            _t: PhantomData,
+        }
+    }
+
+    fn merge(mut self) -> F {
+        while let Some((peak, time)) = self.next_point() {
+            self.accumulator.push_peak(&peak, time);
+        }
+        self.accumulator
+    }
+
+    fn next_point(&mut self) -> Option<(F::Peak, f64)> {
+        self.streams
+            .iter_mut()
+            .map(|s| (s.peek().map(|(_, t)| *t).unwrap_or(f64::INFINITY), s))
+            .reduce(|(cur_time, cur_it), (time, it)| {
+                if time < cur_time {
+                    (time, it)
+                } else {
+                    (cur_time, cur_it)
+                }
+            })
+            .and_then(|(_, it)| it.next())
+    }
+}
+
+/*
+struct FeatureMergeQueueGeneric<'a, D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone> {
     accumulator: F,
     features: &'a [&'a F],
     indices: Vec<usize>,
@@ -355,7 +403,7 @@ struct FeatureMergeQueue<'a, D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> +
     _t: PhantomData<T>,
 }
 
-impl<'a, D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone> FeatureMergeQueue<'a, D, T, F> {
+impl<'a, D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone> FeatureMergeQueueGeneric<'a, D, T, F> {
     fn from_vec(features: &'a [&'a F]) -> Self {
         let mut acc = features[0].clone();
         acc.clear();
@@ -409,11 +457,29 @@ impl<'a, D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone> FeatureMerge
         }
     }
 }
+*/
 
 /// Merge [`FeatureLike`] entities which are within the same mass dimension
 /// error tolerance and within a certain time of one-another by constructing a graph, extracting
 /// connected components, and stitch them together.
-pub trait FeatureGraphBuilder<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone> {
+pub trait FeatureGraphBuilder<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone + PeakSeries> {
+
+    #[inline(always)]
+    fn features_close_in_time<'a>(&self, f: &IndexedFeature<'a, D, T, F>, c: &IndexedFeature<'a, D, T, F>, maximum_gap_size: f64) -> bool {
+        let start_time = f.start_time().unwrap();
+        let end_time = f.end_time().unwrap();
+        let c_start = c.start_time().unwrap();
+        let c_end = c.end_time().unwrap();
+        (start_time - c_end).abs() < maximum_gap_size
+            || (end_time - c_start).abs() < maximum_gap_size
+            || f.as_range().overlaps(&c.as_range())
+    }
+
+    #[allow(unused)]
+    fn features_can_connect<'a>(&self, f: &IndexedFeature<'a, D, T, F>, c: &IndexedFeature<'a, D, T, F>) -> bool {
+        true
+    }
+
     /// Build the feature graph, where `features` are nodes and edges connect features which
     /// are close as given by `mass_error_tolerance`, with gap between start/end or end/start
     /// <= `maximum_gap_size` time units (given by `T`).
@@ -440,20 +506,12 @@ pub trait FeatureGraphBuilder<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> 
             }
             let candidates = features.all_features_for(f.coordinate(), mass_error_tolerance);
             let mut edges = Vec::new();
-            let start_time = f.start_time().unwrap();
-            let end_time = f.end_time().unwrap();
             for c in candidates {
                 if f.index == c.index || c.is_empty() {
                     continue;
-                } else {
-                    let c_start = c.start_time().unwrap();
-                    let c_end = c.end_time().unwrap();
-                    if (start_time - c_end).abs() < maximum_gap_size
-                        || (end_time - c_start).abs() < maximum_gap_size
-                        || f.as_range().overlaps(&c.as_range())
-                    {
-                        edges.push(FeatureLink::new(f.index, c.index));
-                    }
+                }
+                if self.features_close_in_time(f, c, maximum_gap_size) && self.features_can_connect(f, c) {
+                    edges.push(FeatureLink::new(f.index, c.index));
                 }
             }
             let node = FeatureNode::new(f.index, edges);
@@ -516,7 +574,7 @@ pub struct FeatureMerger<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clo
     _f: PhantomData<F>,
 }
 
-impl<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone> FeatureGraphBuilder<D, T, F>
+impl<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone + PeakSeries> FeatureGraphBuilder<D, T, F>
     for FeatureMerger<D, T, F>
 {
 }
@@ -536,53 +594,11 @@ pub struct ChargeAwareFeatureMerger<
 
 /// The core functionality of [`ChargeAwareFeatureMerger`] is in its non-default
 /// [`FeatureGraphBuilder`] implementation.
-impl<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone + KnownCharge>
+impl<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone + KnownCharge + PeakSeries>
     FeatureGraphBuilder<D, T, F> for ChargeAwareFeatureMerger<D, T, F>
 {
-    /// This is identical to the default implementation save that
-    /// it enforces the limitation on charge state matches.
-    fn build_graph(
-        &self,
-        features: &FeatureMap<D, T, F>,
-        mass_error_tolerance: Tolerance,
-        maximum_gap_size: f64,
-    ) -> Vec<FeatureNode> {
-        let features: FeatureMap<D, T, _> = features
-            .iter()
-            .enumerate()
-            .map(|(i, f)| IndexedFeature::new(f, i))
-            .collect();
-
-        let mut nodes = Vec::with_capacity(features.len());
-
-        for f in features.iter() {
-            if f.is_empty() {
-                continue;
-            }
-            let z = f.feature.charge();
-            let candidates = features.all_features_for(f.coordinate(), mass_error_tolerance);
-            let mut edges = Vec::new();
-            let start_time = f.start_time().unwrap();
-            let end_time = f.end_time().unwrap();
-            for c in candidates {
-                if f.index == c.index || c.is_empty() || c.feature.charge() != z {
-                    continue;
-                } else {
-                    let c_start = c.start_time().unwrap();
-                    let c_end = c.end_time().unwrap();
-                    if (start_time - c_end).abs() < maximum_gap_size
-                        || (end_time - c_start).abs() < maximum_gap_size
-                        || f.as_range().overlaps(&c.as_range())
-                    {
-                        edges.push(FeatureLink::new(f.index, c.index));
-                    }
-                }
-            }
-            let node = FeatureNode::new(f.index, edges);
-            nodes.push(node);
-        }
-
-        nodes
+    fn features_can_connect<'a>(&self, f: &IndexedFeature<'a, D, T, F>, c: &IndexedFeature<'a, D, T, F>) -> bool {
+        f.feature.charge() == c.feature.charge()
     }
 }
 
@@ -767,102 +783,4 @@ impl IntoIterator for TarjanStronglyConnectedComponents {
     }
 }
 
-// An implementation detail, [`mzpeaks::feature_map`] doesn't always have an
-// index-yielding search method, and [`FeatureLike`] types
-// do not carry their sort index around with them, so this defines a wrapper
-// type that provides the same API, but also carries around an index. Should
-// not really be needed outside this module.
-mod index_impl {
-    use super::*;
-
-    /// Wrap a [`FeatureLike`] type `F` with a known index for
-    /// ease of reference
-    #[derive(Debug)]
-    pub struct IndexedFeature<'a, D, T, F: FeatureLike<D, T>> {
-        /// Some [`FeatureLike`] type we want to build a graph over
-        pub feature: &'a F,
-        /// The index of `feature` to use as a key
-        pub index: usize,
-        _d: PhantomData<D>,
-        _t: PhantomData<T>,
-    }
-
-    impl<'a, D, T, F: FeatureLike<D, T>> IndexedFeature<'a, D, T, F> {
-        pub fn new(feature: &'a F, index: usize) -> Self {
-            Self {
-                feature,
-                index,
-                _d: PhantomData,
-                _t: PhantomData,
-            }
-        }
-    }
-
-    impl<'a, D: std::ops::Deref, T: std::ops::Deref, F: FeatureLike<D, T> + std::ops::Deref>
-        std::ops::Deref for IndexedFeature<'a, D, T, F>
-    {
-        type Target = &'a F;
-
-        fn deref(&self) -> &Self::Target {
-            &self.feature
-        }
-    }
-
-    impl<'a, D, T, F: FeatureLike<D, T>> TimeInterval<T> for IndexedFeature<'a, D, T, F> {
-        fn start_time(&self) -> Option<f64> {
-            self.feature.start_time()
-        }
-
-        fn end_time(&self) -> Option<f64> {
-            self.feature.end_time()
-        }
-
-        fn apex_time(&self) -> Option<f64> {
-            self.feature.apex_time()
-        }
-
-        fn area(&self) -> f32 {
-            self.feature.area()
-        }
-
-        fn iter_time(&self) -> impl Iterator<Item = f64> {
-            self.feature.iter_time()
-        }
-    }
-
-    impl<'a, D, T, F: FeatureLike<D, T>> PartialEq for IndexedFeature<'a, D, T, F> {
-        fn eq(&self, other: &Self) -> bool {
-            self.feature == other.feature && self.index == other.index
-        }
-    }
-
-    impl<'a, D, T, F: FeatureLike<D, T>> PartialOrd for IndexedFeature<'a, D, T, F> {
-        fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-            self.feature.partial_cmp(&other.feature)
-        }
-    }
-
-    impl<'a, D, T, F: FeatureLike<D, T>> CoordinateLike<D> for IndexedFeature<'a, D, T, F> {
-        fn coordinate(&self) -> f64 {
-            self.feature.coordinate()
-        }
-    }
-
-    impl<'a, D, T, F: FeatureLike<D, T>> IntensityMeasurement for IndexedFeature<'a, D, T, F> {
-        fn intensity(&self) -> f32 {
-            self.feature.intensity()
-        }
-    }
-
-    impl<'a, D, T, F: FeatureLike<D, T>> FeatureLike<D, T> for IndexedFeature<'a, D, T, F> {
-        fn len(&self) -> usize {
-            self.feature.len()
-        }
-
-        fn iter(&self) -> impl Iterator<Item = (f64, f64, f32)> {
-            self.feature.iter()
-        }
-    }
-}
-
-use index_impl::IndexedFeature;
+use super::feature_wrap::IndexedFeature;

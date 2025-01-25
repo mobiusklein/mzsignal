@@ -15,5 +15,5 @@ serde = ["mzsignal/serde"]
 [dependencies]
 pyo3 = {version = "0.21", features=["extension-module"]}
 mzsignal = { path = "../../../mzsignal" }
-mzpeaks = "1.0.0"
+mzpeaks = "1"
 numpy = "0.21"

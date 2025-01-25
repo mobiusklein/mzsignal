@@ -1,8 +1,3 @@
-use std::fs;
-use std::io;
-use std::io::prelude::*;
-use std::str::FromStr;
-
 pub const X: [f64; 120] = [
     178.0133881,
     178.0633881,
@@ -371,48 +366,3 @@ pub const NOISE: [f32; 120] = [
     5.29119106,
     5.49419693,
 ];
-
-
-#[allow(dead_code)]
-pub fn read_1col<T: FromStr>(path: &str) -> io::Result<Vec<T>> {
-    let mut f = fs::File::open(path)?;
-    let mut buffer = String::new();
-    f.read_to_string(&mut buffer)?;
-    let values: Vec<T> = buffer.split_ascii_whitespace().into_iter().map(|line| -> T {
-            match line.parse::<T>() {
-                Ok(v) => v,
-                Err(_err) => {
-                    panic!("Unable to parse line {}", line)
-                }
-            }
-        }).collect();
-    Ok(values)
-}
-
-
-#[allow(dead_code)]
-pub fn read_cols<T: FromStr, const N: usize>(path: &str) -> io::Result<Vec<Vec<T>>> {
-    let mut f = fs::File::open(path)?;
-    let mut buffer = String::new();
-    f.read_to_string(&mut buffer)?;
-
-    let mut cols: Vec<Vec<T>> = Vec::new();
-    for _ in 0..N {
-        cols.push(Vec::new());
-    }
-
-    buffer.split('\n').into_iter().enumerate().filter(|(_j, line)| line.len() > 0).for_each(|(j, line)| {
-        line.split("\t").into_iter().enumerate().for_each(|(i, col)| {
-            match col.parse::<T>() {
-                Ok(v) => {
-                    let bin = &mut cols[i];
-                    bin.push(v);
-                },
-                Err(_err) => {
-                    panic!("Unable to parse line-col {}-{}: {:?}", j, i, line)
-                }
-            }
-        });
-    });
-    Ok(cols)
-}

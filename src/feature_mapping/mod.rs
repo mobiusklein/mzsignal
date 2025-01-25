@@ -49,6 +49,7 @@ use mzpeaks::{
 
 pub mod map;
 mod state;
+mod feature_wrap;
 
 use map::*;
 pub use state::{

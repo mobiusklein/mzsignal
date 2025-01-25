@@ -318,10 +318,10 @@ pub trait FeatureTransform<X, Y>:
     fn rebin(&self, dt: f64) -> Self {
         let pair = crate::average::rebin(self.time_view(), self.intensity_view(), dt);
         let mut dup = self.clone();
-        dup.clear();
         if self.len() < 2 {
             return dup;
         }
+        dup.clear();
         let mut it = self.iter();
         let mut current_point = it.next().unwrap();
         let mut next_point = it.next().unwrap();
