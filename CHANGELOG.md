@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2025-01-26
+
+### Added
+
+- Add `ChargedIonMobilityFeature` map builder
+
+### Changed
+
+- Change `feature_mapping` to use `PeakSeries` trait to build features instead of decaying to raw tuples
+
 ## [1.0.7] - 2024-12-29
 
 ### Added
@@ -201,6 +211,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Add feature extraction algorithm
 
+[1.1.0]: https://github.com/mobiusklein/mzsignal/compare/v1.0.7..v1.1.0
 [1.0.7]: https://github.com/mobiusklein/mzsignal/compare/v1.0.6..v1.0.7
 [1.0.6]: https://github.com/mobiusklein/mzsignal/compare/v1.0.5..v1.0.6
 [1.0.5]: https://github.com/mobiusklein/mzsignal/compare/v1.0.4..v1.0.5
