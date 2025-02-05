@@ -413,6 +413,7 @@ mod test {
         // );
     }
 
+    #[allow(clippy::excessive_precision)]
     #[rstest::rstest]
     fn test_mixed_signal() {
         let time = vec![

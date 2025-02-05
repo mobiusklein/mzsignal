@@ -200,8 +200,8 @@ pub trait ArrayPairLike {
     /// Borrow both arrays under a single lifetime as another [`ArrayPair`]
     fn borrow(&'_ self) -> ArrayPair<'_> {
         ArrayPair::new(
-            Cow::Borrowed(&self.mz_array()),
-            Cow::Borrowed(&self.intensity_array()),
+            Cow::Borrowed(self.mz_array()),
+            Cow::Borrowed(self.intensity_array()),
         )
     }
 
@@ -283,7 +283,7 @@ impl<'lifespan> ArrayPair<'lifespan> {
     }
 }
 
-impl<'lifespan> ArrayPairLike for ArrayPair<'lifespan> {
+impl ArrayPairLike for ArrayPair<'_> {
     fn mz_array(&self) -> &[f64] {
         &self.mz_array
     }
@@ -329,7 +329,7 @@ pub struct ArrayPairSplit<'a, 'b> {
     pub max_mz: f64,
 }
 
-impl<'a, 'b> ArrayPairLike for ArrayPairSplit<'a, 'b> {
+impl ArrayPairLike for ArrayPairSplit<'_, '_> {
     fn mz_array(&self) -> &[f64] {
         &self.mz_array
     }
@@ -399,7 +399,7 @@ pub struct ArrayPairIter<'a> {
     it_intens: std::slice::Iter<'a, f32>
 }
 
-impl<'a> Iterator for ArrayPairIter<'a> {
+impl Iterator for ArrayPairIter<'_> {
     type Item = (f64, f32);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -413,9 +413,9 @@ impl<'a> Iterator for ArrayPairIter<'a> {
     }
 }
 
-impl<'a> std::iter::FusedIterator for ArrayPairIter<'a> {}
+impl std::iter::FusedIterator for ArrayPairIter<'_> {}
 
-impl<'a> std::iter::ExactSizeIterator for ArrayPairIter<'a> {
+impl std::iter::ExactSizeIterator for ArrayPairIter<'_> {
     fn len(&self) -> usize {
         self.it_mz.len()
     }

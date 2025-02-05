@@ -388,7 +388,10 @@ impl PeakPicker {
             })
             .collect();
         eprintln!("Windows: {:?}", windows);
-        let peaks_or_errors: Vec<Result<(Vec<FittedPeak>, ops::Range<usize>), PeakPickerError>> =
+
+        type PeakWindow = (Vec<FittedPeak>, ops::Range<usize>);
+
+        let peaks_or_errors: Vec<Result<PeakWindow, PeakPickerError>> =
             windows
                 .into_par_iter()
                 .map(|iv| {

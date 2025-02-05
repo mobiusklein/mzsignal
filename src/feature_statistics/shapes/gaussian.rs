@@ -31,7 +31,7 @@ impl GaussianPeakShape {
 
     /// Given observed data, compute some initial parameters
     pub fn guess(data: &PeakFitArgs) -> Self {
-        if data.len() == 0 {
+        if data.is_empty() {
             return Self::new(1.0, 1.0, 1.0);
         }
         let idx = data.argmax();
@@ -169,7 +169,7 @@ impl GaussianPeakShape {
         let n = data.len() as f64;
 
         if let Some(constraints) = constraints {
-            let penalties = self.gradient_lagrangian(&data, constraints);
+            let penalties = self.gradient_lagrangian(data, constraints);
             gradient_mu += constraints.weight * penalties.mu;
             gradient_sigma += constraints.weight * penalties.sigma;
             gradient_amplitude += constraints.weight * penalties.amplitude;
@@ -289,9 +289,9 @@ impl GaussianPeakShape {
     /// correctness
     pub fn gradient_split(&self, data: &PeakFitArgs) -> Self {
         Self::new(
-            self.mu_gradient(&data),
-            self.sigma_gradient(&data),
-            self.amplitude_gradient(&data),
+            self.mu_gradient(data),
+            self.sigma_gradient(data),
+            self.amplitude_gradient(data),
         )
         .gradient_norm()
     }

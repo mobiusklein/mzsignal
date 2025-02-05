@@ -232,7 +232,7 @@ impl<'a> SplittingPeakShapeFitter<'a, 'a> {
             }
         });
         let chunks = data.split_at(partition_points.as_slice());
-        let should_split = chunks.iter().filter(|chunk| !(chunk.len() < 6)).count() > 1;
+        let should_split = chunks.iter().filter(|chunk| (chunk.len() >= 6)).count() > 1;
         (should_split, partition_points)
     }
 
@@ -249,7 +249,7 @@ impl<'a> SplittingPeakShapeFitter<'a, 'a> {
                 continue;
             }
             let data_chunk = data.slice(chunk.clone());
-            let (model, fit_result) = self.fit_chunk_with(data_chunk, &config);
+            let (model, fit_result) = self.fit_chunk_with(data_chunk, config);
             if fit_result.success {
                 peak_fits.push(model);
             }

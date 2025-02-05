@@ -38,7 +38,7 @@ impl BiGaussianPeakShape {
 
     /// Given observed data, compute some initial parameters
     pub fn guess(data: &PeakFitArgs) -> Self {
-        if data.len() == 0 {
+        if data.is_empty() {
             return Self::new(1.0, 1.0, 1.0, 1.0);
         }
         let idx = data.argmax();
@@ -124,7 +124,6 @@ impl BiGaussianPeakShape {
         let width_bound = constraints.width_boundary;
         let sigma_falling = self.sigma_falling;
         let sigma_rising = self.sigma_rising;
-        let width_bound = width_bound;
         let mu_bounds = &constraints.center_boundaries;
 
         let amp = self.amplitude;
@@ -309,10 +308,10 @@ impl BiGaussianPeakShape {
     /// correctness
     pub fn gradient_split(&self, data: &PeakFitArgs) -> BiGaussianPeakShape {
         let g = Self::new(
-            self.gradient_mu(&data),
-            self.gradient_sigma_rising(&data),
-            self.gradient_sigma_falling(&data),
-            self.gradient_amplitude(&data),
+            self.gradient_mu(data),
+            self.gradient_sigma_rising(data),
+            self.gradient_sigma_falling(data),
+            self.gradient_amplitude(data),
         );
         g.gradient_norm()
     }

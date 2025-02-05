@@ -183,7 +183,7 @@ impl<'lifespan> ops::Index<usize> for NoiseRegion<'lifespan> {
     }
 }
 
-impl<'lifespan> ops::IndexMut<usize> for NoiseRegion<'lifespan> {
+impl ops::IndexMut<usize> for NoiseRegion<'_> {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         &mut self.windows[index]
     }
@@ -300,7 +300,7 @@ impl Default for SignalBackgroundDenoiser {
     }
 }
 
-impl<'transient, 'lifespan: 'transient> SignalBackgroundDenoiser {
+impl<'lifespan> SignalBackgroundDenoiser {
     pub fn prepare_spectrum(
         &self,
         mz_array: &'lifespan [f64],
@@ -381,8 +381,10 @@ mod test {
             .collect();
 
         let mut acc = Vec::new();
-        let mut picker = PeakPicker::default();
-        picker.signal_to_noise_threshold = 3.0;
+        let picker = PeakPicker {
+            signal_to_noise_threshold: 3.0,
+            ..Default::default()
+        };
         picker.discover_peaks(&X, &yhat, &mut acc).unwrap();
         assert_eq!(acc.len(), 19);
 

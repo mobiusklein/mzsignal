@@ -143,10 +143,12 @@ struct MonotonicBlockedIterator<'a, 'b: 'a, T: Iterator<Item = (f64, &'b mut f32
     it: T,
 }
 
-impl<'a, 'b, T: Iterator<Item = (f64, &'b mut f32)>> MZInterpolator
-    for MonotonicBlockedIterator<'a, 'b, T>
+impl<'b, T: Iterator<Item = (f64, &'b mut f32)>> MZInterpolator
+    for MonotonicBlockedIterator<'_, 'b, T>
 {
 }
+
+type BlockIteratorPoint = (usize, (f64, f64));
 
 impl<'a, 'b: 'a, T: Iterator<Item = (f64, &'b mut f32)>> MonotonicBlockedIterator<'a, 'b, T> {
     fn new(block: &'a ArrayPair<'a>, it: T) -> Self {
@@ -164,11 +166,11 @@ impl<'a, 'b: 'a, T: Iterator<Item = (f64, &'b mut f32)>> MonotonicBlockedIterato
         }
     }
 
-    fn next_value_from_source(&mut self) -> Option<(usize, (f64, f64))> {
+    fn next_value_from_source(&mut self) -> Option<BlockIteratorPoint> {
         self.block.next().map(|(i, (x, y))| (i, (x, y as f64)))
     }
 
-    fn step(&mut self) -> Option<(f64, &'b mut f32, (usize, (f64, f64)))> {
+    fn step(&mut self) -> Option<(f64, &'b mut f32, BlockIteratorPoint)> {
         if let Some((x, o)) = self.it.next() {
             if let Some((vi, (vmz, vint))) = self.next_value.as_ref() {
                 if x >= *vmz {
@@ -353,7 +355,7 @@ impl<'a, 'b: 'a> SignalAverager<'a> {
         block_n: usize,
         block_searcher: &mut MonotonicBlockSearcher,
     ) {
-        for (x, o) in grid_mzs.iter().copied().zip(out.into_iter()) {
+        for (x, o) in grid_mzs.iter().copied().zip(out.iter_mut()) {
             let j = block_searcher.find(x);
             let mz_j = block_mz_array[j];
 
@@ -399,7 +401,6 @@ impl<'a, 'b: 'a> SignalAverager<'a> {
             ) {
                 let interp = self.interpolate_point(mz_j, grid_mz, mz_j1, inten_j, inten_j1);
                 *output_intensity += interp as f32;
-            } else {
             }
         }
     }
@@ -415,7 +416,7 @@ impl<'a, 'b: 'a> SignalAverager<'a> {
                 let normalizer = self.array_pairs.len() as f32;
                 let normalizer_v8 = _mm256_broadcast_ss(&normalizer);
                 let mut chunks_it = out.chunks_exact_mut(LANES);
-                while let Some(chunk) = chunks_it.next() {
+                for chunk in chunks_it.by_ref() {
                     let o_v8: __m256 = _mm256_loadu_ps(chunk.as_ptr());
                     let o_normalized_v8 = _mm256_div_ps(o_v8, normalizer_v8);
                     _mm256_storeu_ps(chunk.as_mut_ptr(), o_normalized_v8);
@@ -437,7 +438,9 @@ impl<'a, 'b: 'a> SignalAverager<'a> {
         const LANES: usize = 8;
         let mut it = out.chunks_exact_mut(LANES);
 
-        while let Some(chunk) = it.next() {
+        for chunk in it.by_ref() {
+            // Make it obvious to the compiler to vectorize
+            #[allow(clippy::needless_range_loop)]
             for i in 0..LANES {
                 chunk[i] /= normalizer;
             }
@@ -483,7 +486,7 @@ impl<'a, 'b: 'a> SignalAverager<'a> {
             if block.is_empty() {
                 continue;
             }
-            let mut block_searcher = MonotonicBlockSearcher::new(&block);
+            let mut block_searcher = MonotonicBlockSearcher::new(block);
             let block_n = block.len();
             let block_mz_array = block.mz_array.as_ref();
             let block_intensity_array = block.intensity_array.as_ref();
@@ -556,7 +559,6 @@ impl<'a, 'b: 'a> SignalAverager<'a> {
                                 let total_v4 = _mm_add_ps(result_v4_f32, acc_v4);
                                 // Store the accumulator back to the array of f32
                                 _mm_storeu_ps(output_intensity_block.as_mut_ptr(), total_v4);
-                            } else {
                             }
                             true
                         } else {
@@ -567,6 +569,7 @@ impl<'a, 'b: 'a> SignalAverager<'a> {
                     false
                 };
                 if !did_vector {
+                    #[allow(clippy::if_same_then_else)] // hint to the compiler that a hardware feature will be available
                     #[cfg(target_arch = "x86_64")]
                     if std::arch::is_x86_feature_detected!("avx") {
                         self.interpolate_into_idx_lanes_fallback::<LANES>(
@@ -722,12 +725,12 @@ impl<'a, 'b: 'a> SignalAverager<'a> {
     }
 }
 
-impl<'lifespan> MZGrid for SignalAverager<'lifespan> {
+impl MZGrid for SignalAverager<'_> {
     fn mz_grid(&self) -> &[f64] {
         &self.mz_grid
     }
 }
-impl<'lifespan> MZInterpolator for SignalAverager<'lifespan> {}
+impl MZInterpolator for SignalAverager<'_> {}
 
 impl<'lifespan> Extend<ArrayPair<'lifespan>> for SignalAverager<'lifespan> {
     fn extend<T: IntoIterator<Item = ArrayPair<'lifespan>>>(&mut self, iter: T) {
@@ -799,27 +802,27 @@ pub struct ArrayPairWithSegments<'a> {
     pub time: f64,
 }
 
-impl<'a> PartialEq for ArrayPairWithSegments<'a> {
+impl PartialEq for ArrayPairWithSegments<'_> {
     fn eq(&self, other: &Self) -> bool {
         self.time == other.time && self.intensity_array == other.intensity_array
     }
 }
 
-impl<'a> PartialOrd for ArrayPairWithSegments<'a> {
+impl PartialOrd for ArrayPairWithSegments<'_> {
     fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
-        Some(self.cmp(&other))
+        Some(self.cmp(other))
     }
 }
 
-impl<'a> Eq for ArrayPairWithSegments<'a> {}
+impl Eq for ArrayPairWithSegments<'_> {}
 
-impl<'a> Ord for ArrayPairWithSegments<'a> {
+impl Ord for ArrayPairWithSegments<'_> {
     fn cmp(&self, other: &Self) -> cmp::Ordering {
         self.time.total_cmp(&other.time)
     }
 }
 
-impl<'a> CoordinateLike<Time> for ArrayPairWithSegments<'a> {
+impl CoordinateLike<Time> for ArrayPairWithSegments<'_> {
     fn coordinate(&self) -> f64 {
         self.time
     }
@@ -880,7 +883,6 @@ impl<'a, 'lifespan: 'a> SegmentGridSignalAverager<'lifespan> {
         match i {
             Ok(i) => Some(i),
             Err(i) => (i.saturating_sub(2)..(i + 2).min(self.array_pairs.len()))
-                .into_iter()
                 .min_by(|i, j| {
                     let err_i = self
                         .array_pairs
@@ -936,7 +938,7 @@ impl<'a, 'lifespan: 'a> SegmentGridSignalAverager<'lifespan> {
         if block.is_empty() {
             return ArrayPairWithSegments {
                 array_pair: block,
-                segments: segments,
+                segments,
                 intensity_array: Vec::new(),
                 time,
             };
@@ -980,13 +982,11 @@ impl<'a, 'lifespan: 'a> SegmentGridSignalAverager<'lifespan> {
                     segment.start = i;
                     opened = true;
                 }
-            } else {
-                if opened {
-                    segment.end = i;
-                    opened = false;
-                    segments.push(segment);
-                    segment = Segment::default();
-                }
+            } else if opened {
+                segment.end = i;
+                opened = false;
+                segments.push(segment);
+                segment = Segment::default();
             }
         }
         if opened {
@@ -995,7 +995,7 @@ impl<'a, 'lifespan: 'a> SegmentGridSignalAverager<'lifespan> {
         }
         ArrayPairWithSegments {
             array_pair: block,
-            segments: segments,
+            segments,
             intensity_array: intensity_axis_,
             time,
         }
@@ -1057,12 +1057,12 @@ impl<'a, 'lifespan: 'a> SegmentGridSignalAverager<'lifespan> {
     }
 }
 
-impl<'lifespan> MZGrid for SegmentGridSignalAverager<'lifespan> {
+impl MZGrid for SegmentGridSignalAverager<'_> {
     fn mz_grid(&self) -> &[f64] {
         &self.mz_grid
     }
 }
-impl<'lifespan> MZInterpolator for SegmentGridSignalAverager<'lifespan> {}
+impl MZInterpolator for SegmentGridSignalAverager<'_> {}
 
 #[derive(Debug)]
 pub struct SegmentGridSignalAveragerIter<'lifespan> {
@@ -1140,7 +1140,7 @@ mod test {
             .unwrap();
 
         let mut averager = SignalAverager::new(low_mz, high_mz, 0.001);
-        averager.extend(scans.clone().into_iter());
+        averager.extend(scans.clone());
 
         let _yhat = averager.interpolate();
         Ok(())
@@ -1224,14 +1224,14 @@ mod test {
             // log::info!("{i}: {t} with {} peaks", row.len());
             let peaks: MZPeakSetType<FittedPeak> = row
                 .mz_array
-                .into_iter()
-                .zip(row.intensity_array.into_iter())
+                .iter()
+                .zip(row.intensity_array.iter())
                 .map(|(mz, i)| FittedPeak::new(*mz, *i, 0, *i, 0.005))
                 .collect();
 
             // log::info!("Reprofiling");
             let peak_models = reprofiler
-                .build_peak_shape_models(&peaks.as_slice(), crate::reprofile::PeakShape::Gaussian);
+                .build_peak_shape_models(peaks.as_slice(), crate::reprofile::PeakShape::Gaussian);
             let block = reprofiler.reprofile_from_models(&peak_models);
             (t, block)
         };

@@ -110,8 +110,7 @@ pub trait MapState<C: IndexedCoordinate<D> + IntensityMeasurement + 'static, D: 
         self.peak_table()
             .iter()
             .enumerate()
-            .map(|(i, ps)| (0..ps.len()).into_iter().map(move |j| MapIndex::new(i, j)))
-            .flatten()
+            .flat_map(|(i, ps)| (0..ps.len()).map(move |j| MapIndex::new(i, j)))
     }
 
     /// The change in absolute time between time indices `i` and `j`
@@ -128,7 +127,7 @@ pub trait MapState<C: IndexedCoordinate<D> + IntensityMeasurement + 'static, D: 
 
     /// Find the time index closest to `time`
     fn nearest_time_point(&self, time: f64) -> usize {
-        nearest(&self.time_axis(), time, 0)
+        nearest(self.time_axis(), time, 0)
     }
 
     /// Iterate over [`MapIndex`] coordinates for the `query` peak in the row at `time_index`

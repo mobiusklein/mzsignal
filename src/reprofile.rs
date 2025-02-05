@@ -98,7 +98,7 @@ impl PeakShapeModel {
     /// Create a [`PeakShape::Gaussian`] [`PeakShapeModel`]
     pub fn gaussian(peak: &FittedPeak) -> PeakShapeModel {
         PeakShapeModel {
-            peak: peak.clone(),
+            peak: *peak,
             shape: PeakShape::Gaussian,
         }
     }
@@ -255,7 +255,7 @@ pub struct PeakSetReprofiler {
     pub mz_end: f64,
 }
 
-impl<'passing, 'transient: 'passing, 'lifespan: 'transient> PeakSetReprofiler {
+impl<'lifespan> PeakSetReprofiler {
     pub fn new(mz_start: f64, mz_end: f64, dx: f64) -> PeakSetReprofiler {
         PeakSetReprofiler {
             mz_grid: gridspace(mz_start, mz_end, dx),
@@ -496,7 +496,7 @@ mod test {
     }
 
     #[test]
-    fn test_top_level() -> () {
+    fn test_top_level() {
         let peaks = prepare_peaks();
         assert_eq!(peaks.len(), 37);
 

@@ -20,7 +20,7 @@ pub struct PeakFitArgsIter<'a> {
     >,
 }
 
-impl<'a> Iterator for PeakFitArgsIter<'a> {
+impl Iterator for PeakFitArgsIter<'_> {
     type Item = (f64, f64);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -28,9 +28,9 @@ impl<'a> Iterator for PeakFitArgsIter<'a> {
     }
 }
 
-impl<'a> FusedIterator for PeakFitArgsIter<'a> {}
+impl FusedIterator for PeakFitArgsIter<'_> {}
 
-impl<'a> ExactSizeIterator for PeakFitArgsIter<'a> {
+impl ExactSizeIterator for PeakFitArgsIter<'_> {
     fn len(&self) -> usize {
         self.inner.len()
     }
@@ -192,8 +192,7 @@ impl<'c, 'd, 'a: 'c, 'b: 'd, 'e: 'c + 'd + 'a + 'b> PeakFitArgs<'a, 'b> {
         let mut candidates = Vec::new();
 
         for (i, max_i) in maxima_indices.iter().copied().enumerate() {
-            for j in (i + 1)..maxima_indices.len() {
-                let max_j = maxima_indices[j];
+            for max_j in maxima_indices[i + 1..].iter().copied() {
                 for min_k in minima_indices.iter().copied() {
                     if self.time[max_i] > self.time[min_k] || self.time[min_k] > self.time[max_j] {
                         continue;
@@ -211,10 +210,10 @@ impl<'c, 'd, 'a: 'c, 'b: 'd, 'e: 'c + 'd + 'a + 'b> PeakFitArgs<'a, 'b> {
                 }
             }
         }
-        let split_point = candidates
+
+        candidates
             .into_iter()
-            .max_by(|a, b| a.total_distance().total_cmp(&b.total_distance()));
-        split_point
+            .max_by(|a, b| a.total_distance().total_cmp(&b.total_distance()))
     }
 
     /// Find the indices that separate the signal into discrete segments according
@@ -357,6 +356,10 @@ impl<'c, 'd, 'a: 'c, 'b: 'd, 'e: 'c + 'd + 'a + 'b> PeakFitArgs<'a, 'b> {
     /// The length of the arrays
     pub fn len(&self) -> usize {
         self.time.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.time.is_empty()
     }
 
     /// Create a new [`PeakFitArgs`] from this one that borrows its data from this one

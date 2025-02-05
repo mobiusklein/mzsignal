@@ -121,6 +121,7 @@ pub const X: [f64; 120] = [
     183.9633881,
 ];
 
+#[allow(clippy::excessive_precision)]
 pub const Y: [f32; 120] = [
     0.00000000e+000,
     0.00000000e+000,
@@ -244,6 +245,7 @@ pub const Y: [f32; 120] = [
     5.64199389e-097,
 ];
 
+#[allow(clippy::excessive_precision)]
 pub const NOISE: [f32; 120] = [
     0.34864356,
     5.91395866,

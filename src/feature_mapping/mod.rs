@@ -77,6 +77,17 @@ pub struct FeatureExtracterType<
     _t: PhantomData<T>,
 }
 
+
+
+/// Get a mutable reference ot the enclosed [`MapState`].
+///
+/// Care must be taken not to invalidate the invariants.
+impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T> AsMut<S> for FeatureExtracterType<S, C, D, T> {
+    fn as_mut(&mut self) -> &mut S {
+        &mut self.state
+    }
+}
+
 impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
     FeatureExtracterType<S, C, D, T>
 {
@@ -102,13 +113,6 @@ impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
         &self.state
     }
 
-    /// Get a mutable reference ot the enclosed [`MapState`].
-    ///
-    /// Care must be taken not to invalidate the invariants.
-    pub fn as_mut(&mut self) -> &mut S {
-        &mut self.state
-    }
-
     /// Drop associated dynamic programming table and retrieve the enclosed [`MapState`]
     pub fn into_inner(self) -> S {
         self.state
@@ -126,7 +130,7 @@ impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
             let from_index = MapIndex::new(index, peak.get_index() as usize);
             let links: Vec<MapLink> = self
                 .state
-                .query_with_index(&peak, index + 1, error_tolerance)
+                .query_with_index(peak, index + 1, error_tolerance)
                 .map(|to_index| {
                     let peak_at = self.state.peak_at(to_index);
                     let mass_error = error_tolerance
@@ -197,7 +201,7 @@ impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
 
     fn solve_layer_links(
         &self,
-        segments: &mut Vec<MapPath>,
+        segments: &mut [MapPath],
         index_link_weights: &mut Vec<(usize, &MapLink, f32)>,
         seen_nodes: &mut HashSet<MapIndex>,
     ) -> Vec<bool> {
@@ -206,9 +210,7 @@ impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
         let mut seen_map_paths = vec![false; segments.len()];
 
         for (path_i, link, weight) in index_link_weights {
-            if seen_map_paths[*path_i] {
-                continue;
-            } else if seen_nodes.contains(&link.to_index) || seen_nodes.contains(&link.from_index) {
+            if seen_map_paths[*path_i] || seen_nodes.contains(&link.to_index) || seen_nodes.contains(&link.from_index) {
                 continue;
             } else {
                 let path = &mut segments[*path_i];
@@ -445,8 +447,8 @@ mod test {
             time_axis.push(t);
             let peaks: MZPeakSetType<CentroidPeak> = row
                 .mz_array
-                .into_iter()
-                .zip(row.intensity_array.into_iter())
+                .iter()
+                .zip(row.intensity_array.iter())
                 .map(|(mz, i)| CentroidPeak::new(*mz, *i, 0))
                 .collect();
             peak_table.push(peaks);
@@ -473,8 +475,8 @@ mod test {
             time_axis.push(t);
             let peaks: MZPeakSetType<CentroidPeak> = row
                 .mz_array
-                .into_iter()
-                .zip(row.intensity_array.into_iter())
+                .iter()
+                .zip(row.intensity_array.iter())
                 .map(|(mz, i)| CentroidPeak::new(*mz, *i, 0))
                 .collect();
             peak_table.push(peaks);
@@ -504,8 +506,8 @@ mod test {
             time_axis.push(t);
             let peaks: DeconvolutedPeakSet = row
                 .mz_array
-                .into_iter()
-                .zip(row.intensity_array.into_iter())
+                .iter()
+                .zip(row.intensity_array.iter())
                 .map(|(mz, i)| DeconvolutedPeak::new(*mz, *i, 1, 0))
                 .collect();
             peak_table.push(peaks);

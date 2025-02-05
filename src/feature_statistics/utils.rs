@@ -276,7 +276,7 @@ pub trait PeakShapeModel: Clone {
             } else {
                 1.0
             });
-        (1.0 - line_test.max(1e-5)).max(0.0).min(1.0)
+        (1.0 - line_test.max(1e-5)).clamp(0.0, 1.0)
     }
 
     /// Given observed data, compute some initial parameters.
@@ -307,9 +307,9 @@ pub trait FeatureTransform<X, Y>:
     fn smooth(&mut self, size: usize) {
         let x = self.intensity_view();
         let mut y = x.to_vec();
-        crate::smooth::moving_average_dyn(&x, &mut y, size * 3);
+        crate::smooth::moving_average_dyn(x, &mut y, size * 3);
         self.iter_mut()
-            .zip(y.into_iter())
+            .zip(y)
             .for_each(|((_, _, intensity), val)| {
                 *intensity = val;
             });

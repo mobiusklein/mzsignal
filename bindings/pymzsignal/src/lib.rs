@@ -24,9 +24,9 @@ use mzpeaks::{CoordinateLike, IndexedCoordinate, IntensityMeasurement};
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub struct Tolerance(_Tolerance);
 
-impl Into<_Tolerance> for Tolerance {
-    fn into(self) -> _Tolerance {
-        self.0
+impl From<Tolerance> for _Tolerance {
+    fn from(value: Tolerance) -> _Tolerance {
+        value.0
     }
 }
 
@@ -100,7 +100,7 @@ impl PyFittedPeak {
 
     #[getter]
     fn index(&self) -> u32 {
-        return self.0.index;
+        self.0.index
     }
 
     #[getter]
@@ -189,9 +189,7 @@ impl From<f64> for ErrorToleranceArg {
 
 impl<'a> FromPyObject<'a> for ErrorToleranceArg {
     fn extract(ob: &'a PyAny) -> PyResult<Self> {
-        if ob.is_instance_of::<PyFloat>() {
-            Ok(ErrorToleranceArg(ob.extract()?))
-        } else if ob.is_instance_of::<Tolerance>() {
+        if ob.is_instance_of::<PyFloat>() || ob.is_instance_of::<Tolerance>() {
             Ok(ErrorToleranceArg(ob.extract()?))
         } else if ob.is_instance_of::<PyString>() {
             let s: &str = ob.extract()?;
@@ -210,9 +208,9 @@ impl<'a> FromPyObject<'a> for ErrorToleranceArg {
     }
 }
 
-impl Into<_Tolerance> for ErrorToleranceArg {
-    fn into(self) -> _Tolerance {
-        self.0.into()
+impl From<ErrorToleranceArg> for _Tolerance {
+    fn from(val: ErrorToleranceArg) -> Self {
+        val.0.into()
     }
 }
 
@@ -225,11 +223,7 @@ impl PyPeakSet {
 
     #[pyo3(signature=(mz, error_tolerance=10.0f64.into()))]
     pub fn has_peak(&self, mz: f64, error_tolerance: ErrorToleranceArg) -> Option<PyFittedPeak> {
-        if let Some(peak) = self.0.has_peak(mz, error_tolerance.into()) {
-            Some(peak.clone())
-        } else {
-            None
-        }
+        self.0.has_peak(mz, error_tolerance.into()).copied()
     }
 
     pub fn all_peaks_for(
@@ -239,20 +233,14 @@ impl PyPeakSet {
     ) -> PyResult<Vec<PyFittedPeak>> {
         let res = self
             .0
-            .all_peaks_for(mz, error_tolerance.into())
-            .iter()
-            .copied()
-            .collect::<Vec<_>>();
+            .all_peaks_for(mz, error_tolerance.into()).to_vec();
         Ok(res)
     }
 
     pub fn between(&self, m1: f64, m2: f64) -> PyResult<Vec<PyFittedPeak>> {
         Ok(self
             .0
-            .between(m1, m2, _Tolerance::PPM(10.0))
-            .into_iter()
-            .copied()
-            .collect())
+            .between(m1, m2, _Tolerance::PPM(10.0)).to_vec())
     }
 
     fn __getitem__(&self, i: Bound<PyAny>) -> PyResult<PyFittedPeak> {
@@ -263,7 +251,7 @@ impl PyPeakSet {
             if i >= self.len() {
                 Err(PyIndexError::new_err(i))
             } else {
-                Ok(self[i].clone())
+                Ok(self[i])
             }
         } else {
             Err(PyTypeError::new_err("Could not select indices from input"))
@@ -287,7 +275,7 @@ fn py_approximate_signal_to_noise(
 ) -> PyResult<f32> {
     let tmp = intensity_array.as_slice()?;
     let result = approximate_signal_to_noise(tmp[index], tmp, index);
-    return Ok(result);
+    Ok(result)
 }
 
 #[pyfunction]
@@ -306,12 +294,12 @@ fn py_fit_full_width_at_half_max(
         fwhm.left_width,
         fwhm.right_width,
     );
-    return Ok(res);
+    Ok(res)
 }
 
 #[pyfunction]
 #[pyo3(name = "denoise", signature = (mz_array, intensity_array, scale = 5.0, inplace = true))]
-fn py_denoise<'py>(
+fn py_denoise(
     py: Python,
     mz_array: PyReadonlyArray1<f64>,
     intensity_array: Bound<PyArray1<f32>>,
@@ -344,13 +332,16 @@ fn py_denoise<'py>(
     }
 }
 
+
+type PyArrayPair = (Py<PyArray1<f64>>, Py<PyArray1<f32>>);
+
 #[pyfunction]
 #[pyo3(name = "average_signal", signature = (array_pairs, dx = 0.002))]
 fn py_average_signal(
     py: Python<'_>,
     array_pairs: Vec<(PyReadonlyArray1<f64>, PyReadonlyArray1<f32>)>,
     dx: f64,
-) -> PyResult<(Py<PyArray1<f64>>, Py<PyArray1<f32>>)> {
+) -> PyResult<PyArrayPair> {
     let wrapped_pairs: Vec<ArrayPair> = array_pairs
         .iter()
         .map(|(x, y)| {
@@ -392,8 +383,8 @@ fn py_pick_peaks(
     match peaks_res {
         Ok(_) => {
             let pypeaks: Vec<PyFittedPeak> =
-                py.allow_threads(|| acc.into_iter().map(|p| PyFittedPeak(p)).collect());
-            return Ok(PyPeakSet::new(pypeaks));
+                py.allow_threads(|| acc.into_iter().map(PyFittedPeak).collect());
+            Ok(PyPeakSet::new(pypeaks))
         }
         Err(err) => match err {
             PeakPickerError::IntervalTooSmall => Err(PyException::new_err("Interval is too small")),
@@ -412,10 +403,7 @@ fn py_reprofile(
     py: Python,
     peaks: &PyPeakSet,
     dx: f64,
-) -> (
-    Py<PyArray<f64, Dim<[usize; 1]>>>,
-    Py<PyArray<f32, Dim<[usize; 1]>>>,
-) {
+) -> PyArrayPair {
     let pair = py.allow_threads(|| {
         let pair = reprofile(peaks.0.iter().map(|p| &p.0), dx);
         pair

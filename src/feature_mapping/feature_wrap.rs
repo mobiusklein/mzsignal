@@ -38,7 +38,7 @@ impl<'a, D: Deref, T: Deref, F: FeatureLike<D, T> + Deref> Deref for IndexedFeat
     }
 }
 
-impl<'a, D, T, F: FeatureLike<D, T>> TimeInterval<T> for IndexedFeature<'a, D, T, F> {
+impl<D, T, F: FeatureLike<D, T>> TimeInterval<T> for IndexedFeature<'_, D, T, F> {
     fn start_time(&self) -> Option<f64> {
         self.feature.start_time()
     }
@@ -60,31 +60,31 @@ impl<'a, D, T, F: FeatureLike<D, T>> TimeInterval<T> for IndexedFeature<'a, D, T
     }
 }
 
-impl<'a, D, T, F: FeatureLike<D, T>> PartialEq for IndexedFeature<'a, D, T, F> {
+impl<D, T, F: FeatureLike<D, T>> PartialEq for IndexedFeature<'_, D, T, F> {
     fn eq(&self, other: &Self) -> bool {
         self.feature == other.feature && self.index == other.index
     }
 }
 
-impl<'a, D, T, F: FeatureLike<D, T>> PartialOrd for IndexedFeature<'a, D, T, F> {
+impl<D, T, F: FeatureLike<D, T>> PartialOrd for IndexedFeature<'_, D, T, F> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.feature.partial_cmp(&other.feature)
+        self.feature.partial_cmp(other.feature)
     }
 }
 
-impl<'a, D, T, F: FeatureLike<D, T>> CoordinateLike<D> for IndexedFeature<'a, D, T, F> {
+impl<D, T, F: FeatureLike<D, T>> CoordinateLike<D> for IndexedFeature<'_, D, T, F> {
     fn coordinate(&self) -> f64 {
         self.feature.coordinate()
     }
 }
 
-impl<'a, D, T, F: FeatureLike<D, T>> IntensityMeasurement for IndexedFeature<'a, D, T, F> {
+impl<D, T, F: FeatureLike<D, T>> IntensityMeasurement for IndexedFeature<'_, D, T, F> {
     fn intensity(&self) -> f32 {
         self.feature.intensity()
     }
 }
 
-impl<'a, D, T, F: FeatureLike<D, T>> FeatureLike<D, T> for IndexedFeature<'a, D, T, F> {
+impl<D, T, F: FeatureLike<D, T>> FeatureLike<D, T> for IndexedFeature<'_, D, T, F> {
     fn len(&self) -> usize {
         self.feature.len()
     }

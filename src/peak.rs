@@ -1,7 +1,6 @@
 
 use std::fmt;
 
-use mzpeaks;
 use mzpeaks::peak::MZPoint;
 use mzpeaks::{
     CentroidLike, CoordinateLike, IndexedCoordinate, IntensityMeasurement,
@@ -71,7 +70,6 @@ impl From<FittedPeak> for mzpeaks::peak::MZPoint {
         Self {
             mz: peak.coordinate(),
             intensity: peak.intensity(),
-            ..Self::default()
         }
     }
 }
@@ -126,7 +124,7 @@ mod test {
         let fpeak = FittedPeak::from(peak.clone());
         assert_eq!(fpeak.full_width_at_half_max, DEFAULT_FWHM);
         assert_eq!(fpeak.mz(), peak.mz);
-        assert_eq!(CentroidPeak::from(fpeak.clone()), peak);
-        assert_eq!(MZPoint::from(fpeak.clone()), MZPoint::from(peak.clone()));
+        assert_eq!(CentroidPeak::from(fpeak), peak);
+        assert_eq!(MZPoint::from(fpeak), MZPoint::from(peak.clone()));
     }
 }

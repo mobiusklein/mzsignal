@@ -479,16 +479,15 @@ fn lorentzian_least_squares(
     assert!(intensity_array.len() > lstop);
     assert!(intensity_array.len() > lstart);
 
-    let rmse = (lstart..=lstop)
-        .into_iter()
+
+    (lstart..=lstop)
         .map(|i| {
             let u = (partial_peak_fit.full_width_at_half_max as f64) * (mz_array[i] - v0);
             let y1 = amplitude / (1.0 + u * u);
             let y2 = intensity_array[i] as f64;
             (y1 - y2).powi(2)
         })
-        .sum();
-    rmse
+        .sum()
 }
 
 /// Fit a Lorentzian peak shape at `index`.

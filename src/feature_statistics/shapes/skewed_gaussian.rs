@@ -38,7 +38,7 @@ impl SkewedGaussianPeakShape {
 
     /// Given observed data, compute some initial parameters
     pub fn guess(data: &PeakFitArgs) -> Self {
-        if data.len() == 0 {
+        if data.is_empty() {
             return Self::new(1.0, 1.0, 1.0, 1.0);
         }
         let idx = data.argmax();
@@ -94,10 +94,10 @@ impl SkewedGaussianPeakShape {
     /// correctness
     pub fn gradient_split(&self, data: &PeakFitArgs) -> Self {
         Self::new(
-            self.mu_gradient(&data),
-            self.sigma_gradient(&data),
-            self.amplitude_gradient(&data),
-            self.lambda_gradient(&data),
+            self.mu_gradient(data),
+            self.sigma_gradient(data),
+            self.amplitude_gradient(data),
+            self.lambda_gradient(data),
         )
         .gradient_norm()
     }
@@ -127,8 +127,8 @@ impl SkewedGaussianPeakShape {
         let two_sigma = sigma * 2.0;
         let sigma_square = sigma.powi(2);
         let sigma_cubed = sigma.powi(3);
-        let skew = 2.0 * 1.4142135623731 * amp * lam;
-        let delta_skew = -2.0 * 1.4142135623731 * amp;
+        let skew = 2.0 * core::f64::consts::SQRT_2 * amp * lam;
+        let delta_skew = -2.0 * core::f64::consts::SQRT_2 * amp;
         let sqrt_2_lam = SQRT_2 * lam;
         let sqrt_pi_sigma = PI.sqrt() * sigma;
         let sqrt_pi_sigma_square = PI.sqrt() * sigma_square;
@@ -225,7 +225,7 @@ impl SkewedGaussianPeakShape {
 
         let two_sigma = sigma * 2.0;
         let sigma_square = sigma.powi(2);
-        let skew = 2.0 * 1.4142135623731 * amp * lam;
+        let skew = 2.0 * SQRT_2 * amp * lam;
         let sqrt_2_lam = SQRT_2 * lam;
         let sqrt_pi_sigma = PI.sqrt() * sigma;
         let neg_half_lam_squared = -1_f64 / 2.0 * lam.powi(2);
@@ -259,7 +259,7 @@ impl SkewedGaussianPeakShape {
         let two_sigma = sigma * 2.0;
         let sigma_square = sigma.powi(2);
         let sigma_cubed = sigma.powi(3);
-        let skew = 2.0 * 1.4142135623731 * amp * lam;
+        let skew = 2.0 * SQRT_2 * amp * lam;
         let sqrt_2_lam = SQRT_2 * lam;
         let sqrt_pi_sigma_square = PI.sqrt() * sigma_square;
         let neg_half_lam_squared = -1_f64 / 2.0 * lam.powi(2);
@@ -317,7 +317,7 @@ impl SkewedGaussianPeakShape {
 
         let two_sigma = sigma * 2.0;
         let sigma_square = sigma.powi(2);
-        let delta_skew = -2.0 * 1.4142135623731 * amp;
+        let delta_skew = -2.0 * SQRT_2 * amp;
         let sqrt_2_lam = SQRT_2 * lam;
         let sqrt_pi_sigma = PI.sqrt() * sigma;
         let neg_half_lam_squared = -1_f64 / 2.0 * lam.powi(2);
