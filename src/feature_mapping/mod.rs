@@ -52,6 +52,7 @@ pub mod map;
 mod state;
 
 use map::*;
+use state::FeatureGraphMergeResult;
 pub use state::{
     ChargeAwareFeatureMerger, ChargedPeakMapState, FeatureGraphBuilder, FeatureLink, FeatureMerger,
     FeatureNode, IonMobilityChargedPeakMapState, MapState, PeakMapState,
@@ -77,12 +78,12 @@ pub struct FeatureExtracterType<
     _t: PhantomData<T>,
 }
 
-
-
 /// Get a mutable reference ot the enclosed [`MapState`].
 ///
 /// Care must be taken not to invalidate the invariants.
-impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T> AsMut<S> for FeatureExtracterType<S, C, D, T> {
+impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T> AsMut<S>
+    for FeatureExtracterType<S, C, D, T>
+{
     fn as_mut(&mut self) -> &mut S {
         &mut self.state
     }
@@ -172,6 +173,21 @@ impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
             .map(|i| self.state.node_to_feature(&i))
     }
 
+    fn extract_features_inner(
+        &mut self,
+        error_tolerance: Tolerance,
+        min_length: usize,
+        maximum_gap_size: f64,
+    ) -> FeatureGraphMergeResult<D, T, <S as MapState<C, D, T>>::FeatureType> {
+        self.build_index(error_tolerance);
+        let (paths, all_used_nodes) = self.build_paths();
+        let mut features = self.paths_to_features(&paths, min_length);
+        features.extend(self.extract_orphan_nodes(all_used_nodes));
+        let features = FeatureMap::new(features);
+        self.state
+            .merge_features(&features, error_tolerance, maximum_gap_size)
+    }
+
     /// Extract features from the peak map, connecting peaks whose `D` mass coordinate
     /// is within `error_tolerance` units of each other, of at least `min_length` points
     /// long, and having gaps of no more than `maximum_gap_size` `T` time units wide.
@@ -184,17 +200,24 @@ impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
         min_length: usize,
         maximum_gap_size: f64,
     ) -> FeatureMap<D, T, S::FeatureType> {
-        self.build_index(error_tolerance);
-        let (paths, all_used_nodes) = self.build_paths();
-        let mut features = self.paths_to_features(&paths, min_length);
-        features.extend(self.extract_orphan_nodes(all_used_nodes));
-        let features = FeatureMap::new(features);
-        let features = self
-            .state
-            .merge_features(&features, error_tolerance, maximum_gap_size);
+        let FeatureGraphMergeResult {
+            features,
+            leaked_peaks,
+        } = self.extract_features_inner(error_tolerance, min_length, maximum_gap_size);
+
+        let mut sub_state = S::create_from_time_axis(self.state.time_axis().to_vec());
+        sub_state.populate_from_points(leaked_peaks);
+
+        let mut orphan_map = Self::new(sub_state);
+        let FeatureGraphMergeResult {
+            features: orphan_features,
+            leaked_peaks: _,
+        } = orphan_map.extract_features_inner(error_tolerance, min_length, maximum_gap_size);
+
         // TODO: When viable to introduce a breaking change, push minimum length filter into `merge_features`
         features
             .into_iter()
+            .chain(orphan_features)
             .filter(|f| f.len() >= min_length)
             .collect()
     }
@@ -210,7 +233,10 @@ impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
         let mut seen_map_paths = vec![false; segments.len()];
 
         for (path_i, link, weight) in index_link_weights {
-            if seen_map_paths[*path_i] || seen_nodes.contains(&link.to_index) || seen_nodes.contains(&link.from_index) {
+            if seen_map_paths[*path_i]
+                || seen_nodes.contains(&link.to_index)
+                || seen_nodes.contains(&link.from_index)
+            {
                 continue;
             } else {
                 let path = &mut segments[*path_i];
@@ -460,7 +486,7 @@ mod test {
         if false {
             crate::text::write_feature_table("features_graph_tims.txt", features.iter())?;
         }
-        assert_eq!(features.len(), 792);
+        assert_eq!(features.len(), 774);
         Ok(())
     }
 
@@ -491,7 +517,7 @@ mod test {
         }
 
         eprintln!("Extracted {} features", features.len());
-        assert_eq!(features.len(), 25784);
+        assert_eq!(features.len(), 25820);
         Ok(())
     }
 
@@ -518,8 +544,20 @@ mod test {
         );
         let features = peak_map_builder.extract_features(Tolerance::PPM(10.0), 3, 0.25);
 
+        features.iter().enumerate().for_each(|(i, f)| {
+            let centroid = f.neutral_mass();
+            let n = f.len();
+            for (j, pt) in f.iter().enumerate() {
+                if !Tolerance::PPM(10.0).test(centroid, pt.0) {
+                    let x = pt.0;
+                    let e = Tolerance::PPM(10.0).format_error(centroid, x);
+                    eprintln!("{i}:{j}/{n} {centroid} too far from {} ({e})", pt.0);
+                }
+            }
+        });
+
         eprintln!("Extracted {} features", features.len());
-        assert_eq!(features.len(), 25784);
+        assert_eq!(features.len(), 25820);
         Ok(())
     }
 }

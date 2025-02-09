@@ -1,6 +1,7 @@
-use std::marker::PhantomData;
 use std::mem;
+use std::{collections::LinkedList, marker::PhantomData};
 
+use log::trace;
 use mzpeaks::{
     feature::{ChargedFeature, ChargedFeatureWrapper, Feature, NDFeature, NDFeatureAdapter},
     feature_map::FeatureMap,
@@ -86,8 +87,43 @@ pub trait MapState<C: IndexedCoordinate<D> + IntensityMeasurement + 'static, D: 
     /// Get a reference to the sparse peak table
     fn peak_table(&self) -> &[PeakSetVec<C, D>];
 
+    fn peak_table_mut(&mut self) -> &mut [PeakSetVec<C, D>];
+
     /// Fill the peak table from an iterator over (time, peak list)s
     fn populate_from_iterator(&mut self, it: impl Iterator<Item = (f64, PeakSetVec<C, D>)>);
+
+    fn populate_from_points(&mut self, mut points: Vec<(C, f64)>) {
+        if points.is_empty() {
+            return;
+        }
+        points.sort_by(|a, b| a.1.total_cmp(&b.1));
+
+        let mut table_entries = LinkedList::new();
+
+        let mut last_time = points.first().map(|(_, t)| *t).unwrap();
+        let mut peak_list = Vec::new();
+        for (peak, time) in points {
+            if time != last_time {
+                table_entries.push_back((last_time, peak_list));
+                last_time = time;
+                peak_list = Vec::new();
+            }
+            peak_list.push(peak);
+        }
+
+        if !peak_list.is_empty() {
+            table_entries.push_back((last_time, peak_list));
+        }
+
+        for (time, peaks) in table_entries {
+            let i = self.nearest_time_point(time);
+            if let Some(slot) = self.peak_table_mut().get_mut(i) {
+                slot.extend(peaks);
+            }
+        }
+    }
+
+    fn create_from_time_axis(time_axis: Vec<f64>) -> Self;
 
     /// The length of the time dimension of the map
     fn len(&self) -> usize {
@@ -206,7 +242,7 @@ pub trait MapState<C: IndexedCoordinate<D> + IntensityMeasurement + 'static, D: 
         features: &FeatureMap<D, T, Self::FeatureType>,
         mass_error_tolerance: Tolerance,
         maximum_gap_size: f64,
-    ) -> FeatureMap<D, T, Self::FeatureType> {
+    ) -> FeatureGraphMergeResult<D, T, Self::FeatureType> {
         let merger = Self::FeatureMergerType::default();
         merger.bridge_feature_gaps(features, mass_error_tolerance, maximum_gap_size)
     }
@@ -233,6 +269,21 @@ where
 
     fn populate_from_iterator(&mut self, it: impl Iterator<Item = (f64, PeakSetVec<C, D>)>) {
         self._from_iter(it);
+    }
+
+    fn create_from_time_axis(time_axis: Vec<f64>) -> Self {
+        let mut peak_table = Vec::with_capacity(time_axis.len());
+        time_axis
+            .iter()
+            .for_each(|_| peak_table.push(PeakSetVec::empty()));
+        Self {
+            time_axis,
+            peak_table,
+        }
+    }
+
+    fn peak_table_mut(&mut self) -> &mut [PeakSetVec<C, D>] {
+        &mut self.peak_table
     }
 }
 
@@ -322,6 +373,21 @@ where
             feature.push(peak, time);
         }
         feature
+    }
+
+    fn create_from_time_axis(time_axis: Vec<f64>) -> Self {
+        let mut peak_table = Vec::with_capacity(time_axis.len());
+        time_axis
+            .iter()
+            .for_each(|_| peak_table.push(PeakSetVec::empty()));
+        Self {
+            time_axis,
+            peak_table,
+        }
+    }
+
+    fn peak_table_mut(&mut self) -> &mut [PeakSetVec<C, D>] {
+        &mut self.peak_table
     }
 }
 
@@ -444,6 +510,18 @@ where
     type FeatureType = ChargedIonMobilityFeature<Mass>;
     type FeatureMergerType = IonMobilityChargeAwareFeatureMerger<Mass, Self::FeatureType>;
 
+    fn create_from_time_axis(time_axis: Vec<f64>) -> Self {
+        let mut peak_table = Vec::with_capacity(time_axis.len());
+        time_axis
+            .iter()
+            .for_each(|_| peak_table.push(PeakSetVec::empty()));
+        Self {
+            time_axis,
+            peak_table,
+            ..Default::default()
+        }
+    }
+
     fn time_axis(&self) -> &[f64] {
         &self.time_axis
     }
@@ -521,35 +599,89 @@ where
         }
         feature
     }
+
+    fn peak_table_mut(&mut self) -> &mut [PeakSetVec<C, Mass>] {
+        &mut self.peak_table
+    }
 }
 
-struct FeatureMergeQueue<'a, D, T, F: PeakSeries + Clone + FeatureLikeMut<D, T>> {
+struct FeatureMergeQueue<'a, D, T, F: PeakSeries + Clone + FeatureLikeMut<D, T>>
+where
+    F::Peak: CoordinateLike<D> + IntensityMeasurement,
+{
     accumulator: F,
-    _features: &'a [&'a F],
+    error_tolerance: Tolerance,
+    features: &'a [&'a F],
     streams: Vec<std::iter::Peekable<F::Iter<'a>>>,
     _d: PhantomData<D>,
     _t: PhantomData<T>,
 }
 
-impl<'a, D, T, F: PeakSeries + Clone + FeatureLikeMut<D, T>> FeatureMergeQueue<'a, D, T, F> {
-    fn from_vec(features: &'a [&'a F]) -> Self {
+impl<'a, D, T, F: PeakSeries + Clone + FeatureLikeMut<D, T>> FeatureMergeQueue<'a, D, T, F>
+where
+    F::Peak: CoordinateLike<D> + IntensityMeasurement,
+{
+    fn from_vec(features: &'a [&'a F], error_tolerance: Tolerance) -> Self {
         let mut acc = features[0].clone();
         acc.clear();
         let streams = features.iter().map(|f| f.iter_peaks().peekable()).collect();
         Self {
             accumulator: acc,
-            _features: features,
+            features,
+            error_tolerance,
             streams,
             _d: PhantomData,
             _t: PhantomData,
         }
     }
 
-    fn merge(mut self) -> F {
+    fn centroid_of_features(&self) -> f64 {
+        let centroid = self
+            .features
+            .iter()
+            .flat_map(|f| f.iter())
+            .map(|(coord, _, intensity)| {
+                let intensity = intensity as f64;
+                (intensity * coord, intensity)
+            })
+            .reduce(|(acc, norm), (a, b)| (acc + a, norm + b))
+            .map(|(a, b)| a / b)
+            .unwrap();
+        centroid
+    }
+
+    fn filtered_centroid(&self, centroid: f64) -> f64 {
+        let centroid = self
+            .features
+            .iter()
+            .flat_map(|f| f.iter())
+            .filter_map(|(coord, _, intensity)| {
+                if self.error_tolerance.test(centroid, coord) {
+                    let intensity = intensity as f64;
+                    Some((intensity * coord, intensity))
+                } else {
+                    None
+                }
+            })
+            .reduce(|(acc, norm), (a, b)| (acc + a, norm + b))
+            .map(|(a, b)| a / b)
+            .unwrap();
+        centroid
+    }
+
+    fn merge(mut self) -> (F, Vec<(F::Peak, f64)>) {
+        let mut center = self.centroid_of_features();
+        (0..2).for_each(|_| center = self.filtered_centroid(center));
+
+        let mut leaked = Vec::new();
         while let Some((peak, time)) = self.next_point() {
-            self.accumulator.push_peak(&peak, time);
+            if self.error_tolerance.test(center, peak.coordinate()) {
+                self.accumulator.push_peak(&peak, time);
+            } else {
+                leaked.push((peak, time));
+            }
         }
-        self.accumulator
+        (self.accumulator, leaked)
     }
 
     fn next_point(&mut self) -> Option<(F::Peak, f64)> {
@@ -567,6 +699,18 @@ impl<'a, D, T, F: PeakSeries + Clone + FeatureLikeMut<D, T>> FeatureMergeQueue<'
     }
 }
 
+
+pub struct FeatureGraphMergeResult<
+    D,
+    T,
+    F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone + PeakSeries,
+> {
+    /// Merged features which are only guaranteed to be *mostly* coherent
+    pub features: FeatureMap<D, T, F>,
+    /// Peaks that did not fit within high variance feature sets being merged
+    pub leaked_peaks: Vec<(F::Peak, f64)>
+}
+
 /// Merge [`FeatureLike`] entities which are within the same mass dimension
 /// error tolerance and within a certain time of one-another by constructing a graph, extracting
 /// connected components, and stitch them together.
@@ -574,7 +718,8 @@ pub trait FeatureGraphBuilder<
     D,
     T,
     F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone + PeakSeries,
->
+> where
+    F::Peak: CoordinateLike<D> + IntensityMeasurement,
 {
     #[inline(always)]
     fn features_close_in_time<'a>(
@@ -654,8 +799,11 @@ pub trait FeatureGraphBuilder<
         &self,
         features: &FeatureMap<D, T, F>,
         connected_components: Vec<Vec<usize>>,
-    ) -> FeatureMap<D, T, F> {
+        mass_error_tolerance: Tolerance,
+    ) -> FeatureGraphMergeResult<D, T, F> {
         let mut merged_nodes = Vec::new();
+        let mut leaked_peaks = Vec::new();
+        let mut n_leaked = 0;
         for component_indices in connected_components {
             if component_indices.is_empty() {
                 continue;
@@ -668,13 +816,23 @@ pub trait FeatureGraphBuilder<
             let acc = if features_of.len() == 1 {
                 features_of[0].clone()
             } else {
-                FeatureMergeQueue::from_vec(&features_of).merge()
+                let (acc, leaked_peaks_of) =
+                    FeatureMergeQueue::from_vec(&features_of, mass_error_tolerance).merge();
+                if !leaked_peaks_of.is_empty() {
+                    n_leaked += 1;
+                    leaked_peaks.extend(leaked_peaks_of);
+                }
+                acc
             };
 
             merged_nodes.push(acc);
         }
 
-        FeatureMap::new(merged_nodes)
+        trace!(
+            "Leaked {} peaks from {n_leaked} features",
+            leaked_peaks.len()
+        );
+        FeatureGraphMergeResult { features: FeatureMap::new(merged_nodes), leaked_peaks }
     }
 
     fn bridge_feature_gaps(
@@ -682,10 +840,10 @@ pub trait FeatureGraphBuilder<
         features: &FeatureMap<D, T, F>,
         mass_error_tolerance: Tolerance,
         maximum_gap_size: f64,
-    ) -> FeatureMap<D, T, F> {
+    ) -> FeatureGraphMergeResult<D, T, F> {
         let graph = self.build_graph(features, mass_error_tolerance, maximum_gap_size);
         let components = self.find_connected_components(graph);
-        self.merge_components(features, components)
+        self.merge_components(features, components, mass_error_tolerance)
     }
 }
 
@@ -699,6 +857,8 @@ pub struct FeatureMerger<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clo
 
 impl<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone + PeakSeries>
     FeatureGraphBuilder<D, T, F> for FeatureMerger<D, T, F>
+where
+    F::Peak: CoordinateLike<D> + IntensityMeasurement,
 {
 }
 
@@ -719,6 +879,8 @@ pub struct ChargeAwareFeatureMerger<
 /// [`FeatureGraphBuilder`] implementation.
 impl<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone + KnownCharge + PeakSeries>
     FeatureGraphBuilder<D, T, F> for ChargeAwareFeatureMerger<D, T, F>
+where
+    F::Peak: CoordinateLike<D> + IntensityMeasurement,
 {
     fn features_can_connect<'a>(
         &self,
@@ -752,6 +914,8 @@ impl<
             + CoordinateLike<IonMobility>
             + PeakSeries,
     > FeatureGraphBuilder<D, Time, F> for IonMobilityChargeAwareFeatureMerger<D, F>
+where
+    F::Peak: CoordinateLike<D> + IntensityMeasurement,
 {
     fn features_can_connect<'a>(
         &self,
