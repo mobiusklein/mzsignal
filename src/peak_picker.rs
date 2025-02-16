@@ -2,22 +2,28 @@
 //!
 //!
 use std::cmp;
-use std::ops;
+
+#[cfg(feature = "parallelism")]
+use std::{
+    collections::btree_map::{BTreeMap, Entry},
+    ops,
+};
 
 use thiserror::Error;
 
 use num_traits::Float;
+
 #[cfg(feature = "parallelism")]
 use rayon::prelude::*;
 
-use crate::peak::FittedPeak;
-use crate::peak_statistics::isclose;
-use crate::peak_statistics::lorentzian_fit;
-use crate::peak_statistics::{
-    approximate_signal_to_noise, full_width_at_half_max, quadratic_fit, WidthFit,
+use crate::{
+    peak::FittedPeak,
+    peak_statistics::{
+        approximate_signal_to_noise, full_width_at_half_max, isclose, lorentzian_fit,
+        quadratic_fit, WidthFit,
+    },
+    search::{nearest, nearest_left, nearest_right},
 };
-use crate::search::{nearest, nearest_left, nearest_right};
-use std::collections::btree_map::{BTreeMap, Entry};
 
 /// The type of peak picking to perform, defining the expected
 /// peak shape fitting function.
@@ -185,6 +191,9 @@ impl PeakPicker {
         intensity_array: &[f32],
         peak_accumulator: &mut Vec<FittedPeak>,
     ) -> Result<usize, PeakPickerError> {
+        if mz_array.is_empty() {
+            return Ok(0);
+        }
         match mz_array.first() {
             Some(start_mz) => match mz_array.last() {
                 Some(stop_mz) => self.discover_peaks_in_interval(
@@ -242,14 +251,13 @@ impl PeakPicker {
         let intensity_threshold = self.intensity_threshold;
         let signal_to_noise_threshold = self.signal_to_noise_threshold;
 
-        let n = mz_array.len() - 1;
+        let n = mz_array.len().saturating_sub(1);
         let m = peak_accumulator.len();
 
         let start_index = cmp::max(nearest(mz_array, start_mz, 0), 1);
-        let stop_index = cmp::min(nearest(mz_array, stop_mz, n), n - 1);
+        let stop_index = cmp::min(nearest(mz_array, stop_mz, n), n.saturating_sub(1));
 
-        if intensity_array[start_index..stop_index].len() != mz_array[start_index..stop_index].len()
-        {
+        if intensity_array.len() != mz_array.len() {
             return Err(PeakPickerError::MZIntensityMismatch);
         }
 
@@ -328,14 +336,20 @@ impl PeakPicker {
                     if fwhm > 0.0 {
                         if fwhm > 1.0 {
                             fwhm = 1.0;
+                            partial_fit_state.full_width_at_half_max = fwhm
                         }
 
                         if signal_to_noise > current_intensity {
                             signal_to_noise = current_intensity;
+                            partial_fit_state.signal_to_noise = signal_to_noise;
                         }
 
                         let fitted_mz =
                             self.fit_peak(index, mz_array, intensity_array, &partial_fit_state);
+
+                        if fitted_mz < 1.0 || fitted_mz.is_nan() || fitted_mz.is_infinite() {
+                            panic!("fitted m/z = {fitted_mz}, {partial_fit_state:?}")
+                        }
 
                         let peak = FittedPeak::new(
                             fitted_mz,
@@ -391,40 +405,39 @@ impl PeakPicker {
 
         type PeakWindow = (Vec<FittedPeak>, ops::Range<usize>);
 
-        let peaks_or_errors: Vec<Result<PeakWindow, PeakPickerError>> =
-            windows
-                .into_par_iter()
-                .map(|iv| {
-                    let mut local_acc: Vec<FittedPeak> = Vec::new();
-                    let start_idx = iv.start;
-                    let end_idx = iv.end;
+        let peaks_or_errors: Vec<Result<PeakWindow, PeakPickerError>> = windows
+            .into_par_iter()
+            .map(|iv| {
+                let mut local_acc: Vec<FittedPeak> = Vec::new();
+                let start_idx = iv.start;
+                let end_idx = iv.end;
 
-                    match self.discover_peaks(
-                        &mz_array[start_idx..end_idx],
-                        &intensity_array[start_idx..end_idx],
-                        &mut local_acc,
-                    ) {
-                        Ok(_i) => {
-                            let res: Vec<FittedPeak> = local_acc
-                                .into_iter()
-                                .map(|mut p| {
-                                    // Shift the indices forwards to match the "real" coordinates
-                                    p.index += start_idx as u32;
-                                    p
-                                })
-                                // If the peak's index falls within either overhang, drop it
-                                .filter(|p| {
-                                    (p.index - start_idx as u32 > overhang as u32 || start_idx == 0)
-                                        && (end_idx == n || p.index < (end_idx - overhang) as u32)
-                                })
-                                .collect();
+                match self.discover_peaks(
+                    &mz_array[start_idx..end_idx],
+                    &intensity_array[start_idx..end_idx],
+                    &mut local_acc,
+                ) {
+                    Ok(_i) => {
+                        let res: Vec<FittedPeak> = local_acc
+                            .into_iter()
+                            .map(|mut p| {
+                                // Shift the indices forwards to match the "real" coordinates
+                                p.index += start_idx as u32;
+                                p
+                            })
+                            // If the peak's index falls within either overhang, drop it
+                            .filter(|p| {
+                                (p.index - start_idx as u32 > overhang as u32 || start_idx == 0)
+                                    && (end_idx == n || p.index < (end_idx - overhang) as u32)
+                            })
+                            .collect();
 
-                            Ok((res, iv))
-                        }
-                        Err(e) => Err(e),
+                        Ok((res, iv))
                     }
-                })
-                .collect();
+                    Err(e) => Err(e),
+                }
+            })
+            .collect();
 
         let mut ivmap: BTreeMap<usize, Vec<FittedPeak>> = BTreeMap::new();
 
@@ -527,7 +540,9 @@ mod test {
 
     #[test]
     fn test_peak_picker_no_noise_lorentzian() {
-        let picker: PeakPicker = PeakPickerBuilder::new().fit_type(PeakFitType::Lorentzian).into();
+        let picker: PeakPicker = PeakPickerBuilder::new()
+            .fit_type(PeakFitType::Lorentzian)
+            .into();
         let mut acc = Vec::new();
         let pair = crate::average::rebin(&X, &Y, 0.005);
         // let result = picker.discover_peaks(&X, &Y, &mut acc);

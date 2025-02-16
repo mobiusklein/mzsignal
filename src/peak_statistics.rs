@@ -167,10 +167,7 @@ pub(crate) fn curve_regression_ndarray<T: Float + Into<f64>, U: Float + Into<f64
 #[doc(hidden)]
 #[allow(non_snake_case)]
 #[cfg(feature = "nalgebra")]
-pub(crate) fn curve_regression_nalgebra<
-    T: Float + Into<f64>,
-    U: Float + Into<f64>,
->(
+pub(crate) fn curve_regression_nalgebra<T: Float + Into<f64>, U: Float + Into<f64>>(
     xs: &[T],
     ys: &[U],
     n: usize,
@@ -241,7 +238,6 @@ pub fn fit_rising_side_width(
     data_index: usize,
     signal_to_noise: f32,
 ) -> f64 {
-
     assert!(data_index < mz_array.len());
     assert!(data_index < intensity_array.len());
 
@@ -315,7 +311,6 @@ pub fn fit_falling_side_width(
     data_index: usize,
     signal_to_noise: f32,
 ) -> f64 {
-
     assert!(data_index < mz_array.len());
     assert!(data_index < intensity_array.len());
 
@@ -421,13 +416,18 @@ pub fn full_width_at_half_max(
 }
 
 /// Fit a Gaussian peak shape at `index`.
-pub fn quadratic_fit(mz_array: &[f64], intensity_array: &[f32], index: usize, partial_peak_fit: &PartialPeakFit) -> f64 {
+pub fn quadratic_fit(
+    mz_array: &[f64],
+    intensity_array: &[f32],
+    index: usize,
+    partial_peak_fit: &PartialPeakFit,
+) -> f64 {
     let n = mz_array.len().saturating_sub(1);
     assert!(n < intensity_array.len());
     let mut step: usize;
 
     // The interpolation range must fit from points at least `min_dx` m/z units apart
-    let min_dx = (partial_peak_fit.full_width_at_half_max / 10.0) as f64;
+    let min_dx = (partial_peak_fit.full_width_at_half_max / 10.0).min(0.1) as f64;
 
     if index < 1 {
         mz_array[0]
@@ -453,16 +453,24 @@ pub fn quadratic_fit(mz_array: &[f64], intensity_array: &[f32], index: usize, pa
         let x3 = mz_array[step];
         let y3 = intensity_array[step] as f64;
 
+        if (x2 - x3).abs() > 0.5 || (x2 - x1).abs() > 0.5 {
+            return x2;
+        }
+
         // fit the centroid m/z
         let d = (y2 - y1) * (x3 - x2) - (y3 - y2) * (x2 - x1);
-        if aboutzero(d) {
+        if aboutzero(d) || d < 1e-4 {
             x2
         } else {
-            ((x1 + x2) - ((y2 - y1) * (x3 - x2) * (x1 - x3)) / d) / 2.0
+            let x_fit = ((x1 + x2) - ((y2 - y1) * (x3 - x2) * (x1 - x3)) / d) / 2.0;
+            if x_fit < 1.0 {
+                x2
+            } else {
+                x_fit
+            }
         }
     }
 }
-
 
 fn lorentzian_least_squares(
     mz_array: &[f64],
@@ -473,12 +481,10 @@ fn lorentzian_least_squares(
     lstart: usize,
     lstop: usize,
 ) -> f64 {
-
     assert!(mz_array.len() > lstop);
     assert!(mz_array.len() > lstart);
     assert!(intensity_array.len() > lstop);
     assert!(intensity_array.len() > lstart);
-
 
     (lstart..=lstop)
         .map(|i| {
@@ -505,7 +511,9 @@ pub fn lorentzian_fit(
 ) -> f64 {
     let amplitude = intensity_array[index] as f64;
     let mut v0 = mz_array[index];
-    let step = ((v0 - mz_array[index + 1]) / 500.0).abs();
+    let step = ((v0 - mz_array[index.saturating_sub(1)]) / 500.0)
+        .abs()
+        .min(((v0 - mz_array[index + 1]) / 500.0).abs().min(0.1));
 
     if index < 1 {
         return v0;
@@ -579,7 +587,6 @@ pub fn lorentzian_fit(
 mod test {
     use super::*;
     use crate::gridspace;
-
 
     #[test]
     fn test_empty_array_width() {
