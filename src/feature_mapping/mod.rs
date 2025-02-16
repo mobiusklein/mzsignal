@@ -288,6 +288,7 @@ impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
         }
     }
 
+    #[allow(unused)]
     #[inline(always)]
     fn check_for_duplicate_nodes(&self, paths: &[MapPath]) {
         #[cfg(debug_assertions)]

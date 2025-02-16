@@ -2,7 +2,6 @@
 
 use std::collections::{HashMap, HashSet};
 
-use mzpeaks::prelude::FeatureLike;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
