@@ -42,6 +42,7 @@ use std::collections::HashSet;
 use std::marker::PhantomData;
 use std::mem::swap;
 
+use feature_wrap::merge_feature_maps;
 use mzpeaks::{
     feature_map::FeatureMap, peak_set::PeakSetVec, prelude::*, IonMobility, Mass, Time, Tolerance,
     MZ,
@@ -215,11 +216,7 @@ impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
         } = orphan_map.extract_features_inner(error_tolerance, min_length, maximum_gap_size);
 
         // TODO: When viable to introduce a breaking change, push minimum length filter into `merge_features`
-        features
-            .into_iter()
-            .chain(orphan_features)
-            .filter(|f| f.len() >= min_length)
-            .collect()
+        merge_feature_maps(features, orphan_features, min_length)
     }
 
     fn solve_layer_links(

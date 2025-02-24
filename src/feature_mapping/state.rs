@@ -758,11 +758,14 @@ pub trait FeatureGraphBuilder<
         mass_error_tolerance: Tolerance,
         maximum_gap_size: f64,
     ) -> Vec<FeatureNode> {
-        let features: FeatureMap<D, T, _> = features
+        let mut storage: Vec<_> = Vec::with_capacity(features.len());
+        storage.extend(features
             .iter()
             .enumerate()
             .map(|(i, f)| IndexedFeature::new(f, i))
-            .collect();
+        );
+
+        let features: FeatureMap<D, T, _> = FeatureMap::wrap(storage);
 
         let mut nodes = Vec::with_capacity(features.len());
 
@@ -1029,7 +1032,11 @@ impl TarjanStronglyConnectedComponents {
 
     /// Identify all connected components iteratively.
     pub fn solve(&mut self) {
-        let mut stack = Vec::new();
+        let n = self.nodes.len() / 4;
+        let mut stack = Vec::with_capacity(n);
+        if self.connected_components.capacity() < n {
+            self.connected_components.reserve(n);
+        }
 
         for i in 0..self.nodes.len() {
             if !self.index_is_visited(i) {
