@@ -78,6 +78,9 @@
 //!
 //! otherwise, the default `nalgebra` backend will be used.
 
+#[cfg(not(any(feature = "nalgebra", feature = "openblas", feature = "netlib", feature = "intel-mkl")))]
+compile_error!("Cannot compile `mzsignal` without a linear algebra backend, please specify a backend via a feature flag");
+
 
 pub(crate) mod arrayops;
 pub mod average;
