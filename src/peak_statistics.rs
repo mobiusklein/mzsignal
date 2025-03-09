@@ -104,7 +104,7 @@ pub(crate) fn curve_regression<T: Float + Into<f64>, U: Float + Into<f64>>(
 ) -> f64 {
     cfg_if! {
         if #[cfg(feature = "ndarray")] {
-            curve_regression_ndarray(xs, ys, n, terms)
+            return curve_regression_ndarray(xs, ys, n, terms)
         }
         else if #[cfg(feature = "nalgebra")] {
             curve_regression_nalgebra(xs, ys, n, terms)
