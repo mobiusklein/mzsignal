@@ -315,6 +315,7 @@ dependencies = [
  "mzsignal",
  "numpy",
  "pyo3",
+ "pythonize",
 ]
 
 [[package]]
@@ -378,6 +379,16 @@ dependencies = [
  "pyo3-build-config",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "pythonize"
+version = "0.21.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d0664248812c38cc55a4ed07f88e4df516ce82604b93b1ffdc041aa77a6cb3c"
+dependencies = [
+ "pyo3",
+ "serde",
 ]
 
 [[package]]

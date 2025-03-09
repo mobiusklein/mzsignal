@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::ops::Index;
 
 use mzpeaks::prelude::PeakCollectionMut;
+use mzsignal::feature_statistics::{FitConfig, PeakFitArgs, PeakShape, SplittingPeakShapeFitter};
 use pyo3::exceptions::{PyException, PyIndexError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyFloat, PyLong, PySlice, PyString};
@@ -49,6 +50,7 @@ impl Tolerance {
 }
 
 #[pyclass]
+#[pyo3(name="FittedPeak")]
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub struct PyFittedPeak(FittedPeak);
 
@@ -115,7 +117,7 @@ impl PyFittedPeak {
 
     fn __repr__(&self) -> String {
         format!(
-            "PyFittedPeak({:0.4}, {:0.4}, {}, {:0.4}, {:0.4})",
+            "FittedPeak({:0.4}, {:0.4}, {}, {:0.4}, {:0.4})",
             self.mz(),
             self.intensity(),
             self.index(),
@@ -458,6 +460,62 @@ fn py_savitsky_golay(
     let py_res = res.to_pyarray_bound(py).unbind();
     Ok(py_res)
 }
+
+#[pyclass]
+#[pyo3(name = "FeatureShape")]
+pub struct PyFeatureShape(PeakShape);
+
+#[pymethods]
+impl PyFeatureShape {
+    pub fn density(&self, point: f64) -> f64 {
+        self.0.density(point)
+    }
+
+    pub fn predict<'a>(slf: pyo3::PyRef<'a, Self>, points: PyReadonlyArray1<f64>) -> PyResult<Bound<'a, PyArray1<f32>>> {
+        let times = points.as_slice()?;
+        let inner: &PeakShape = &slf.0;
+        let signal = inner.predict(times);
+
+        let py = slf.py();
+        let x = PyArray1::from_iter_bound(py, signal.into_iter().map(|f| f as f32));
+        Ok(x)
+    }
+
+    pub fn to_dict(slf: pyo3::PyRef<'_, Self>) -> PyResult<Py<PyAny>> {
+        let state = pythonize::pythonize(slf.py(), &slf.0)?;
+        Ok(state)
+    }
+}
+
+
+#[pyfunction]
+fn py_fit_feature(
+    py: Python,
+    time_array: PyReadonlyArray1<f64>,
+    intensity_array: PyReadonlyArray1<f32>,
+    smooth: Option<usize>
+) -> PyResult<Vec<PyFeatureShape>> {
+    let times = time_array.as_slice()?;
+    let intensities = intensity_array.as_slice()?;
+    let fitter = py.allow_threads(|| -> PyResult<SplittingPeakShapeFitter> {
+        let args = PeakFitArgs::from((times, intensities));
+
+        let mut config = FitConfig::default();
+        if let Some(smooth) = smooth {
+            config = config.smooth(smooth);
+        }
+
+        let mut fitter = SplittingPeakShapeFitter::new(args);
+        fitter.fit_with(config);
+
+        Ok(fitter)
+    })?;
+
+    let fits: Vec<_> = fitter.peak_fits.iter().copied().map(PyFeatureShape).collect();
+
+    Ok(fits)
+}
+
 
 /// A Python module implemented in Rust.
 #[pymodule]
