@@ -206,6 +206,7 @@ pub trait MapState<C: IndexedCoordinate<D> + IntensityMeasurement + 'static, D: 
         let peak = self.peak_at(*index);
         let time = self.time_axis()[index.time_index];
         let mut feature = Self::FeatureType::default();
+        feature.reserve(1);
         feature.push(peak, time);
         feature
     }
@@ -213,6 +214,7 @@ pub trait MapState<C: IndexedCoordinate<D> + IntensityMeasurement + 'static, D: 
     /// Convert a [`MapPath`] into an instance of [`Self::FeatureType`]
     fn path_to_feature(&self, path: &MapPath) -> Self::FeatureType {
         let mut feature = Self::FeatureType::default();
+        feature.reserve(path.len() + 1);
         for link in path.iter() {
             let peak = self.peak_at(link.from_index);
             let time = self.time_axis()[link.from_index.time_index];
@@ -239,7 +241,7 @@ pub trait MapState<C: IndexedCoordinate<D> + IntensityMeasurement + 'static, D: 
     /// Uses [`MapState::FeatureMergerType`] to carry out the actual merging.
     fn merge_features(
         &self,
-        features: &FeatureMap<D, T, Self::FeatureType>,
+        features: FeatureMap<D, T, Self::FeatureType>,
         mass_error_tolerance: Tolerance,
         maximum_gap_size: f64,
     ) -> FeatureGraphMergeResult<D, T, Self::FeatureType> {
@@ -346,6 +348,7 @@ where
         let time =
             <ChargedPeakMapState<C, D> as MapState<C, D, T>>::time_axis(self)[index.time_index];
         let mut feature = Self::FeatureType::default();
+        feature.reserve(1);
         feature.push(peak, time);
         feature.charge = peak.charge();
         feature
@@ -353,6 +356,7 @@ where
 
     fn path_to_feature(&self, path: &MapPath) -> Self::FeatureType {
         let mut feature = Self::FeatureType::default();
+        feature.reserve(path.len() + 1);
         for link in path.iter() {
             let peak: &C =
                 <ChargedPeakMapState<C, D> as MapState<C, D, T>>::peak_at(self, link.from_index);
@@ -561,6 +565,7 @@ where
             <IonMobilityChargedPeakMapState<C, Mass> as MapState<C, Mass, Time>>::time_axis(self)
                 [index.time_index];
         let mut feature = Self::FeatureType::default();
+        feature.reserve(1);
         feature.push(peak, time);
         *feature.as_mut().charge_mut() = peak.charge();
         feature
@@ -568,6 +573,7 @@ where
 
     fn path_to_feature(&self, path: &MapPath) -> Self::FeatureType {
         let mut feature = Self::FeatureType::default();
+        feature.reserve(path.len() + 1);
         for link in path.iter() {
             let peak: &C =
                 <IonMobilityChargedPeakMapState<C, Mass> as MapState<C, Mass, Time>>::peak_at(
@@ -611,7 +617,7 @@ where
 {
     accumulator: F,
     error_tolerance: Tolerance,
-    features: &'a [&'a F],
+    features: &'a [F],
     streams: Vec<std::iter::Peekable<F::Iter<'a>>>,
     _d: PhantomData<D>,
     _t: PhantomData<T>,
@@ -621,7 +627,7 @@ impl<'a, D, T, F: PeakSeries + Clone + FeatureLikeMut<D, T>> FeatureMergeQueue<'
 where
     F::Peak: CoordinateLike<D> + IntensityMeasurement,
 {
-    fn from_vec(features: &'a [&'a F], error_tolerance: Tolerance) -> Self {
+    fn from_vec(features: &'a [F], error_tolerance: Tolerance) -> Self {
         let mut acc = features[0].clone();
         acc.clear();
         let streams = features.iter().map(|f| f.iter_peaks().peekable()).collect();
@@ -636,37 +642,32 @@ where
     }
 
     fn centroid_of_features(&self) -> f64 {
-        let centroid = self
-            .features
-            .iter()
-            .flat_map(|f| f.iter())
-            .map(|(coord, _, intensity)| {
-                let intensity = intensity as f64;
-                (intensity * coord, intensity)
-            })
-            .reduce(|(acc, norm), (a, b)| (acc + a, norm + b))
-            .map(|(a, b)| a / b)
-            .unwrap();
-        centroid
+        let mut acc = 0.0;
+        let mut norm = 0.0;
+        for f in self.features.iter() {
+            for (x, _, z) in f.iter() {
+                let z = z as f64;
+                acc = x.mul_add(z, acc);
+                norm += z;
+            }
+        }
+        acc / norm
     }
 
     fn filtered_centroid(&self, centroid: f64) -> f64 {
-        let centroid = self
-            .features
-            .iter()
-            .flat_map(|f| f.iter())
-            .filter_map(|(coord, _, intensity)| {
-                if self.error_tolerance.test(centroid, coord) {
-                    let intensity = intensity as f64;
-                    Some((intensity * coord, intensity))
-                } else {
-                    None
-                }
-            })
-            .reduce(|(acc, norm), (a, b)| (acc + a, norm + b))
-            .map(|(a, b)| a / b)
-            .unwrap();
-        centroid
+        let mut acc = 0.0;
+        let mut norm = 0.0;
+        for f in self.features.iter() {
+            for (x, _, z) in f
+                .iter()
+                .filter(|(x, _, _)| self.error_tolerance.test(*x, centroid))
+            {
+                let z = z as f64;
+                acc = x.mul_add(z, acc);
+                norm += z;
+            }
+        }
+        acc / norm
     }
 
     fn merge(mut self) -> (F, Vec<(F::Peak, f64)>) {
@@ -699,7 +700,6 @@ where
     }
 }
 
-
 pub struct FeatureGraphMergeResult<
     D,
     T,
@@ -708,7 +708,7 @@ pub struct FeatureGraphMergeResult<
     /// Merged features which are only guaranteed to be *mostly* coherent
     pub features: FeatureMap<D, T, F>,
     /// Peaks that did not fit within high variance feature sets being merged
-    pub leaked_peaks: Vec<(F::Peak, f64)>
+    pub leaked_peaks: Vec<(F::Peak, f64)>,
 }
 
 /// Merge [`FeatureLike`] entities which are within the same mass dimension
@@ -717,17 +717,12 @@ pub struct FeatureGraphMergeResult<
 pub trait FeatureGraphBuilder<
     D,
     T,
-    F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone + PeakSeries,
+    F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone + PeakSeries + Default,
 > where
     F::Peak: CoordinateLike<D> + IntensityMeasurement,
 {
     #[inline(always)]
-    fn features_close_in_time<'a>(
-        &self,
-        f: &IndexedFeature<'a, D, T, F>,
-        c: &IndexedFeature<'a, D, T, F>,
-        maximum_gap_size: f64,
-    ) -> bool {
+    fn features_close_in_time<'a>(&self, f: &'a F, c: &'a F, maximum_gap_size: f64) -> bool {
         let start_time = f.start_time().unwrap();
         let end_time = f.end_time().unwrap();
         let c_start = c.start_time().unwrap();
@@ -738,11 +733,7 @@ pub trait FeatureGraphBuilder<
     }
 
     #[allow(unused)]
-    fn features_can_connect<'a>(
-        &self,
-        f: &IndexedFeature<'a, D, T, F>,
-        c: &IndexedFeature<'a, D, T, F>,
-    ) -> bool {
+    fn features_can_connect<'a>(&self, f: &'a F, c: &'a F) -> bool {
         true
     }
 
@@ -758,34 +749,26 @@ pub trait FeatureGraphBuilder<
         mass_error_tolerance: Tolerance,
         maximum_gap_size: f64,
     ) -> Vec<FeatureNode> {
-        let mut storage: Vec<_> = Vec::with_capacity(features.len());
-        storage.extend(features
-            .iter()
-            .enumerate()
-            .map(|(i, f)| IndexedFeature::new(f, i))
-        );
-
-        let features: FeatureMap<D, T, _> = FeatureMap::wrap(storage);
-
         let mut nodes = Vec::with_capacity(features.len());
 
-        for f in features.iter() {
+        for (fi, f) in features.iter().enumerate() {
             if f.is_empty() {
                 continue;
             }
-            let candidates = features.all_features_for(f.coordinate(), mass_error_tolerance);
+            let candidates = features.all_indices_for(f.coordinate(), mass_error_tolerance);
             let mut edges = Vec::new();
-            for c in candidates {
-                if f.index == c.index || c.is_empty() {
+            for ci in candidates {
+                let c = features.get_item(ci);
+                if fi == ci || c.is_empty() {
                     continue;
                 }
                 if self.features_close_in_time(f, c, maximum_gap_size)
                     && self.features_can_connect(f, c)
                 {
-                    edges.push(FeatureLink::new(f.index, c.index));
+                    edges.push(FeatureLink::new(fi, ci));
                 }
             }
-            let node = FeatureNode::new(f.index, edges);
+            let node = FeatureNode::new(fi, edges);
             nodes.push(node);
         }
 
@@ -800,7 +783,7 @@ pub trait FeatureGraphBuilder<
 
     fn merge_components(
         &self,
-        features: &FeatureMap<D, T, F>,
+        mut features: FeatureMap<D, T, F>,
         connected_components: Vec<Vec<usize>>,
         mass_error_tolerance: Tolerance,
     ) -> FeatureGraphMergeResult<D, T, F> {
@@ -811,13 +794,13 @@ pub trait FeatureGraphBuilder<
             if component_indices.is_empty() {
                 continue;
             }
-            let features_of: Vec<_> = component_indices
+            let mut features_of: Vec<_> = component_indices
                 .into_iter()
-                .map(|i| features.get_item(i))
+                .map(|i| mem::take(&mut features[i]))
                 .collect();
 
             let acc = if features_of.len() == 1 {
-                features_of[0].clone()
+                features_of.pop().unwrap()
             } else {
                 let (acc, leaked_peaks_of) =
                     FeatureMergeQueue::from_vec(&features_of, mass_error_tolerance).merge();
@@ -835,16 +818,19 @@ pub trait FeatureGraphBuilder<
             "Leaked {} peaks from {n_leaked} features",
             leaked_peaks.len()
         );
-        FeatureGraphMergeResult { features: FeatureMap::new(merged_nodes), leaked_peaks }
+        FeatureGraphMergeResult {
+            features: FeatureMap::new(merged_nodes),
+            leaked_peaks,
+        }
     }
 
     fn bridge_feature_gaps(
         &self,
-        features: &FeatureMap<D, T, F>,
+        features: FeatureMap<D, T, F>,
         mass_error_tolerance: Tolerance,
         maximum_gap_size: f64,
     ) -> FeatureGraphMergeResult<D, T, F> {
-        let graph = self.build_graph(features, mass_error_tolerance, maximum_gap_size);
+        let graph = self.build_graph(&features, mass_error_tolerance, maximum_gap_size);
         let components = self.find_connected_components(graph);
         self.merge_components(features, components, mass_error_tolerance)
     }
@@ -852,13 +838,13 @@ pub trait FeatureGraphBuilder<
 
 /// A trivial implementation of [`FeatureGraphBuilder`] using its default implementation
 #[derive(Debug, Default, Clone)]
-pub struct FeatureMerger<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone> {
+pub struct FeatureMerger<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone + Default> {
     _d: PhantomData<D>,
     _t: PhantomData<T>,
     _f: PhantomData<F>,
 }
 
-impl<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone + PeakSeries>
+impl<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone + PeakSeries + Default>
     FeatureGraphBuilder<D, T, F> for FeatureMerger<D, T, F>
 where
     F::Peak: CoordinateLike<D> + IntensityMeasurement,
@@ -871,7 +857,7 @@ where
 pub struct ChargeAwareFeatureMerger<
     D,
     T,
-    F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone + KnownCharge,
+    F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone + KnownCharge + Default,
 > {
     _d: PhantomData<D>,
     _t: PhantomData<T>,
@@ -880,17 +866,16 @@ pub struct ChargeAwareFeatureMerger<
 
 /// The core functionality of [`ChargeAwareFeatureMerger`] is in its non-default
 /// [`FeatureGraphBuilder`] implementation.
-impl<D, T, F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone + KnownCharge + PeakSeries>
-    FeatureGraphBuilder<D, T, F> for ChargeAwareFeatureMerger<D, T, F>
+impl<
+        D,
+        T,
+        F: FeatureLike<D, T> + FeatureLikeMut<D, T> + Clone + KnownCharge + PeakSeries + Default,
+    > FeatureGraphBuilder<D, T, F> for ChargeAwareFeatureMerger<D, T, F>
 where
     F::Peak: CoordinateLike<D> + IntensityMeasurement,
 {
-    fn features_can_connect<'a>(
-        &self,
-        f: &IndexedFeature<'a, D, T, F>,
-        c: &IndexedFeature<'a, D, T, F>,
-    ) -> bool {
-        f.feature.charge() == c.feature.charge()
+    fn features_can_connect<'a>(&self, f: &'a F, c: &'a F) -> bool {
+        f.charge() == c.charge()
     }
 }
 
@@ -902,7 +887,8 @@ pub struct IonMobilityChargeAwareFeatureMerger<
         + Clone
         + KnownCharge
         + CoordinateLike<IonMobility>
-        + PeakSeries,
+        + PeakSeries
+        + Default,
 > {
     pub ion_mobility_error_tolerance: f64,
     _f: PhantomData<(F, D)>,
@@ -915,19 +901,15 @@ impl<
             + Clone
             + KnownCharge
             + CoordinateLike<IonMobility>
-            + PeakSeries,
+            + PeakSeries
+            + Default,
     > FeatureGraphBuilder<D, Time, F> for IonMobilityChargeAwareFeatureMerger<D, F>
 where
     F::Peak: CoordinateLike<D> + IntensityMeasurement,
 {
-    fn features_can_connect<'a>(
-        &self,
-        f: &IndexedFeature<'a, D, Time, F>,
-        c: &IndexedFeature<'a, D, Time, F>,
-    ) -> bool {
-        f.feature.charge() == c.feature.charge()
-            && (f.feature.ion_mobility() - c.feature.ion_mobility()).abs()
-                < self.ion_mobility_error_tolerance
+    fn features_can_connect<'a>(&self, f: &'a F, c: &'a F) -> bool {
+        f.charge() == c.charge()
+            && (f.ion_mobility() - c.ion_mobility()).abs() < self.ion_mobility_error_tolerance
     }
 }
 
@@ -965,14 +947,14 @@ impl FeatureNode {
 #[derive(Debug, Default, Clone, Copy)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct FeatureLink {
-    pub from_index: usize,
+    // pub from_index: usize,
     pub to_index: usize,
 }
 
 impl FeatureLink {
-    pub fn new(from_index: usize, to_index: usize) -> Self {
+    pub fn new(_from_index: usize, to_index: usize) -> Self {
         Self {
-            from_index,
+            // from_index,
             to_index,
         }
     }
@@ -1032,12 +1014,7 @@ impl TarjanStronglyConnectedComponents {
 
     /// Identify all connected components iteratively.
     pub fn solve(&mut self) {
-        let n = self.nodes.len() / 4;
-        let mut stack = Vec::with_capacity(n);
-        if self.connected_components.capacity() < n {
-            self.connected_components.reserve(n);
-        }
-
+        let mut stack = Vec::new();
         for i in 0..self.nodes.len() {
             if !self.index_is_visited(i) {
                 self.strong_connect(i, &mut stack)
@@ -1084,19 +1061,15 @@ impl TarjanStronglyConnectedComponents {
         for w in self.edges_of(node_index) {
             if !self.index_is_visited(w) {
                 self.strong_connect(w, stack);
-                self.node_mut(node_index).low_link = Some(
-                    self.node(w)
-                        .low_link
-                        .unwrap()
-                        .min(self.node(node_index).low_link.unwrap()),
-                );
+                let low_link_w = self.node(w).low_link.unwrap();
+                let node = self.node_mut(node_index);
+                let low_link_node = node.low_link.unwrap();
+                node.low_link = Some(low_link_w.min(low_link_node));
             } else if self.node(w).on_stack {
-                self.node_mut(node_index).low_link = Some(
-                    self.node(w)
-                        .index
-                        .unwrap()
-                        .min(self.node(node_index).low_link.unwrap()),
-                );
+                let index_w = self.node(w).index.unwrap();
+                let node = self.node_mut(node_index);
+                let low_link_node = index_w.min(node.low_link.unwrap());
+                node.low_link = Some(low_link_node);
             }
         }
 
@@ -1115,5 +1088,3 @@ impl IntoIterator for TarjanStronglyConnectedComponents {
         self.connected_components.into_iter()
     }
 }
-
-use super::feature_wrap::IndexedFeature;

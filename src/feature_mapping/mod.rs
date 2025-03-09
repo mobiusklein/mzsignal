@@ -186,7 +186,7 @@ impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
         features.extend(self.extract_orphan_nodes(all_used_nodes));
         let features = FeatureMap::new(features);
         self.state
-            .merge_features(&features, error_tolerance, maximum_gap_size)
+            .merge_features(features, error_tolerance, maximum_gap_size)
     }
 
     /// Extract features from the peak map, connecting peaks whose `D` mass coordinate
@@ -224,10 +224,13 @@ impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
         segments: &mut [MapPath],
         index_link_weights: &mut Vec<(usize, &MapLink, f32)>,
         seen_nodes: &mut HashSet<MapIndex>,
-    ) -> Vec<bool> {
+        seen_map_paths: &mut Vec<bool>
+    ) {
         index_link_weights.sort_by(|a, b| a.2.total_cmp(&b.2).reverse());
 
-        let mut seen_map_paths = vec![false; segments.len()];
+        // let mut seen_map_paths = vec![false; segments.len()];
+        seen_map_paths.clear();
+        seen_map_paths.resize(segments.len(), false);
 
         for (path_i, link, weight) in index_link_weights {
             if seen_map_paths[*path_i]
@@ -253,7 +256,6 @@ impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
                 self.extend_path(path, **link);
             }
         }
-        seen_map_paths
     }
 
     fn create_paths_from_unbound_links(
@@ -319,6 +321,7 @@ impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
         let mut unbound_link_weights: Vec<(&MapLink, f32)> = Vec::new();
         let mut index_link_weights: Vec<(usize, &MapLink, f32)> = Vec::new();
         let mut segment_index_counter: usize = 0;
+        let mut visited_paths: Vec<bool> = Vec::new();
 
         for (row_idx, row) in self.paths.iter().enumerate() {
             for path in active_paths.drain(..) {
@@ -352,9 +355,8 @@ impl<S: MapState<C, D, T>, C: IndexedCoordinate<D> + IntensityMeasurement, D, T>
                 }
             }
 
-            let visited_paths =
-                self.solve_layer_links(&mut segments, &mut index_link_weights, &mut seen_nodes);
-            for (visited, path) in visited_paths.into_iter().zip(segments.drain(..)) {
+            self.solve_layer_links(&mut segments, &mut index_link_weights, &mut seen_nodes, &mut visited_paths);
+            for (visited, path) in visited_paths.drain(..).zip(segments.drain(..)) {
                 if visited {
                     working_paths.push(path)
                 } else {
