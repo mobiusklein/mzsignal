@@ -661,4 +661,25 @@ mod test {
             assert!((peak.mz - x).abs() < 1e-6);
         }
     }
+
+    #[test]
+    fn test_flanking_density() {
+        let picker = PeakPicker::default();
+        let raw1 = crate::text::arrays_from_file("test/data/raw1.txt").unwrap();
+        let trimmed1 = crate::text::arrays_from_file("test/data/trimmed1.txt").unwrap();
+
+        let mut raw_acc = Vec::new();
+        picker.discover_peaks(&raw1.mz_array, &raw1.intensity_array, &mut raw_acc).unwrap();
+
+        let mut trimmed_acc = Vec::new();
+        picker.discover_peaks(&trimmed1.mz_array, &trimmed1.intensity_array, &mut trimmed_acc).unwrap();
+
+        assert_eq!(raw_acc.len(), trimmed_acc.len());
+
+        for (a, b) in raw_acc.iter().zip(trimmed_acc.iter()) {
+            let e = (a.mz - b.mz).abs();
+            assert!(e < 1e-5, "{} - {} = {e}", a.mz, b.mz);
+        }
+
+    }
 }

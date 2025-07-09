@@ -247,7 +247,7 @@ pub fn fit_rising_side_width(
     let mut last_y1 = peak;
 
     if peak == 0.0 {
-        return mz;
+        return 0.0;
     }
 
     let mut upper = mz_array[0];
@@ -322,7 +322,7 @@ pub fn fit_falling_side_width(
     let mut last_y1 = peak;
 
     if peak == 0.0 {
-        return mz;
+        return 0.0;
     }
 
     assert!(n < intensity_array.len());
