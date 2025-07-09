@@ -463,7 +463,9 @@ pub fn quadratic_fit(
             x2
         } else {
             let x_fit = ((x1 + x2) - ((y2 - y1) * (x3 - x2) * (x1 - x3)) / d) / 2.0;
-            if x_fit < 1.0 {
+            if (x_fit - x2).abs() > 1.0 {
+                x2
+            } else if x_fit < 1.0 {
                 x2
             } else {
                 x_fit

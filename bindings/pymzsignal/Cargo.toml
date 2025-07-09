@@ -10,11 +10,9 @@ crate-type = ["cdylib"]
 
 [features]
 
-serde = ["mzsignal/serde"]
-
 [dependencies]
 pyo3 = {version = "0.21", features=["extension-module"]}
-mzsignal = { path = "../../../mzsignal" }
+mzsignal = { path = "../../../mzsignal", features = ["serde"]}
 mzpeaks = "1"
 numpy = "0.21"
 pythonize = { version = "0.21" }

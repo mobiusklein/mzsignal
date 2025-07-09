@@ -347,8 +347,8 @@ impl PeakPicker {
                         let fitted_mz =
                             self.fit_peak(index, mz_array, intensity_array, &partial_fit_state);
 
-                        if fitted_mz < 1.0 || fitted_mz.is_nan() || fitted_mz.is_infinite() {
-                            panic!("fitted m/z = {fitted_mz}, {partial_fit_state:?}")
+                        if fitted_mz < 1.0 || fitted_mz.is_nan() || fitted_mz.is_infinite() || (fitted_mz - current_mz).abs() > 1.0 {
+                            panic!("fitted m/z = {fitted_mz}, {partial_fit_state:?} from {current_mz} | {current_intensity}")
                         }
 
                         let peak = FittedPeak::new(
