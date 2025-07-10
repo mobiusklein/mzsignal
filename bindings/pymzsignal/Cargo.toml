@@ -11,8 +11,8 @@ crate-type = ["cdylib"]
 [features]
 
 [dependencies]
-pyo3 = {version = "0.21", features=["extension-module"]}
+pyo3 = {version = "0.25.1", features=["extension-module"]}
 mzsignal = { path = "../../../mzsignal", features = ["serde"]}
 mzpeaks = "1"
-numpy = "0.21"
-pythonize = { version = "0.21" }
+numpy = "0.25"
+pythonize = { version = "0.25" }

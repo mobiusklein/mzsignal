@@ -5,9 +5,9 @@ use mzpeaks::prelude::PeakCollectionMut;
 use mzsignal::feature_statistics::{FitConfig, PeakFitArgs, PeakShape, SplittingPeakShapeFitter};
 use pyo3::exceptions::{PyException, PyIndexError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyFloat, PyLong, PySlice, PyString};
+use pyo3::types::{PyFloat, PyInt, PySlice, PyString};
 
-use numpy::{ndarray::Dim, PyArray, PyArray1, PyReadonlyArray1, ToPyArray};
+use numpy::{ndarray::Dim, PyArray, PyArray1, PyReadonlyArray1, ToPyArray, PyArrayMethods};
 
 use mzsignal::average::average_signal;
 use mzsignal::denoise::denoise;
@@ -190,7 +190,7 @@ impl From<f64> for ErrorToleranceArg {
 }
 
 impl<'a> FromPyObject<'a> for ErrorToleranceArg {
-    fn extract(ob: &'a PyAny) -> PyResult<Self> {
+    fn extract_bound(ob: &pyo3::Bound<'a, pyo3::PyAny>) -> PyResult<Self> {
         if ob.is_instance_of::<PyFloat>() || ob.is_instance_of::<Tolerance>() {
             Ok(ErrorToleranceArg(ob.extract()?))
         } else if ob.is_instance_of::<PyString>() {
@@ -248,7 +248,7 @@ impl PyPeakSet {
     fn __getitem__(&self, i: Bound<PyAny>) -> PyResult<PyFittedPeak> {
         if i.is_instance_of::<PySlice>() {
             Err(PyTypeError::new_err("Could not select indices by slice"))
-        } else if i.is_instance_of::<PyLong>() {
+        } else if i.is_instance_of::<PyInt>() {
             let i: usize = i.extract()?;
             if i >= self.len() {
                 Err(PyIndexError::new_err(i))
@@ -311,7 +311,7 @@ fn py_denoise(
     let mz_view = mz_array.as_slice()?;
     if inplace {
         unsafe {
-            let view = intensity_array.as_gil_ref().as_slice_mut()?;
+            let view = intensity_array.as_slice_mut()?;
             let res = py.allow_threads(|| denoise(mz_view, view, scale));
             match res {
                 Ok(_view) => Ok(intensity_array.into()),
@@ -324,7 +324,7 @@ fn py_denoise(
         match res {
             Ok(_view) => {
                 let pyarray = Python::with_gil(|py| -> Py<PyArray1<f32>> {
-                    let result = PyArray1::from_vec_bound(py, intensity_vec);
+                    let result = PyArray1::from_vec(py, intensity_vec);
                     result.unbind()
                 });
                 Ok(pyarray)
@@ -358,8 +358,8 @@ fn py_average_signal(
         new_arrays
     });
 
-    let x = new_arrays.mz_array.to_pyarray_bound(py).into();
-    let y = new_arrays.intensity_array.to_pyarray_bound(py).into();
+    let x = new_arrays.mz_array.to_pyarray(py).into();
+    let y = new_arrays.intensity_array.to_pyarray(py).into();
     Ok((x, y))
 }
 
@@ -411,8 +411,8 @@ fn py_reprofile(
         pair
     });
     let (mz_array, intensity_array) = Python::with_gil(|py| {
-        let mz_array = pair.mz_array.to_pyarray_bound(py).unbind();
-        let intensity_array = pair.intensity_array.to_pyarray_bound(py).unbind();
+        let mz_array = pair.mz_array.to_pyarray(py).unbind();
+        let intensity_array = pair.intensity_array.to_pyarray(py).unbind();
         (mz_array, intensity_array)
     });
     (mz_array, intensity_array)
@@ -434,7 +434,7 @@ fn py_moving_average(
     });
 
     let new_py_intensity_array: Py<PyArray<f32, Dim<[usize; 1]>>> =
-        new_intensity.to_pyarray_bound(py).unbind();
+        new_intensity.to_pyarray(py).unbind();
     Ok(new_py_intensity_array)
 }
 
@@ -457,7 +457,7 @@ fn py_savitsky_golay(
         Err(e) => return Err(PyValueError::new_err(e.to_string())),
     };
 
-    let py_res = res.to_pyarray_bound(py).unbind();
+    let py_res = res.to_pyarray(py).unbind();
     Ok(py_res)
 }
 
@@ -477,13 +477,13 @@ impl PyFeatureShape {
         let signal = inner.predict(times);
 
         let py = slf.py();
-        let x = PyArray1::from_iter_bound(py, signal.into_iter().map(|f| f as f32));
+        let x = PyArray1::from_iter(py, signal.into_iter().map(|f| f as f32));
         Ok(x)
     }
 
     pub fn to_dict(slf: pyo3::PyRef<'_, Self>) -> PyResult<Py<PyAny>> {
         let state = pythonize::pythonize(slf.py(), &slf.0)?;
-        Ok(state)
+        Ok(state.into())
     }
 }
 
