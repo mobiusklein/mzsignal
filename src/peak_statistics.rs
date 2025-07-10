@@ -405,9 +405,19 @@ pub fn full_width_at_half_max(
         fit_falling_side_width(mz_array, intensity_array, data_index, signal_to_noise);
     fit.right_width = (falling_side_width - mz).abs();
 
-    if aboutzero(rising_side_width) {
-        fit.full_width_at_half_max = 2.0 * fit.right_width;
-    } else if aboutzero(falling_side_width) {
+    let rising_side_zero = aboutzero(rising_side_width);
+    let falling_side_zero = aboutzero(falling_side_width);
+
+    if rising_side_zero {
+        if falling_side_zero {
+            fit.full_width_at_half_max = 0.0;
+            fit.left_width = 0.0;
+            fit.right_width = 0.0;
+        } else {
+            fit.full_width_at_half_max = 2.0 * fit.right_width;
+        }
+        // fit.full_width_at_half_max = 2.0 * fit.right_width;
+    } else if falling_side_zero {
         fit.full_width_at_half_max = 2.0 * fit.left_width;
     } else {
         fit.full_width_at_half_max = falling_side_width - rising_side_width;
@@ -427,7 +437,7 @@ pub fn quadratic_fit(
     let mut step: usize;
 
     // The interpolation range must fit from points at least `min_dx` m/z units apart
-    let min_dx = (partial_peak_fit.full_width_at_half_max / 10.0).min(0.1) as f64;
+    let min_dx = (partial_peak_fit.full_width_at_half_max / 10.0).min(0.01) as f64;
 
     if index < 1 {
         mz_array[0]

@@ -288,7 +288,7 @@ mod test {
         let expected_fits = MultiPeakShapeFit {
             fits: vec![
                 PeakShape::SkewedGaussian(SkewedGaussianPeakShape {
-                    mu: 125.52343374409863,
+                    mu: 125.41582087423923,
                     sigma: 0.24333467521731506,
                     amplitude: 2301265.971958694,
                     lambda: -0.6969704897945564,
@@ -310,7 +310,7 @@ mod test {
             let expected_mu = dispatch_peak!(exp, model, model.mu);
             let observed_mu = dispatch_peak!(obs, model, model.mu);
 
-            assert_is_close!(expected_mu, observed_mu, 1e-3, "mu");
+            assert_is_close!(observed_mu, expected_mu, 1e-3, "mu");
         }
     }
 

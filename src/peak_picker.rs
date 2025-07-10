@@ -680,6 +680,49 @@ mod test {
             let e = (a.mz - b.mz).abs();
             assert!(e < 1e-5, "{} - {} = {e}", a.mz, b.mz);
         }
+    }
 
+    #[test]
+    fn test_flanking_density2() {
+        let picker = PeakPicker::default();
+        let raw1 = crate::text::arrays_from_file("test/data/raw2.txt").unwrap();
+        let trimmed1 = crate::text::arrays_from_file("test/data/trimmed2.txt").unwrap();
+
+        let mut raw_acc = Vec::new();
+        picker.discover_peaks(&raw1.mz_array, &raw1.intensity_array, &mut raw_acc).unwrap();
+
+        let mut trimmed_acc = Vec::new();
+        picker.discover_peaks(&trimmed1.mz_array, &trimmed1.intensity_array, &mut trimmed_acc).unwrap();
+
+        assert_eq!(raw_acc.len(), trimmed_acc.len());
+        raw_acc.sort_by(|a, b| a.partial_cmp(&b).unwrap());
+        trimmed_acc.sort_by(|a, b| a.partial_cmp(&b).unwrap());
+
+        for (a, b) in raw_acc.iter().zip(trimmed_acc.iter()) {
+            let e = (a.mz - b.mz).abs();
+            assert!(e < 1e-5, "{} - {} = {e}\n{a:?}\n{b:?}", a.mz, b.mz);
+        }
+    }
+
+    #[test]
+    fn test_flanking_density3() {
+        let picker = PeakPicker::default();
+        let raw1 = crate::text::arrays_from_file("test/data/raw3.txt").unwrap();
+        let trimmed1 = crate::text::arrays_from_file("test/data/trimmed3.txt").unwrap();
+
+        let mut raw_acc = Vec::new();
+        picker.discover_peaks(&raw1.mz_array, &raw1.intensity_array, &mut raw_acc).unwrap();
+
+        let mut trimmed_acc = Vec::new();
+        picker.discover_peaks(&trimmed1.mz_array, &trimmed1.intensity_array, &mut trimmed_acc).unwrap();
+
+        assert_eq!(raw_acc.len(), trimmed_acc.len());
+        raw_acc.sort_by(|a, b| a.partial_cmp(&b).unwrap());
+        trimmed_acc.sort_by(|a, b| a.partial_cmp(&b).unwrap());
+
+        for (a, b) in raw_acc.iter().zip(trimmed_acc.iter()) {
+            let e = (a.mz - b.mz).abs();
+            assert!(e < 1e-5, "{} - {} = {e}\n{a:?}\n{b:?}", a.mz, b.mz);
+        }
     }
 }

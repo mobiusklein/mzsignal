@@ -528,6 +528,7 @@ fn pymzsignal(_py: Python, m: &Bound<PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(py_reprofile, m)?)?;
     m.add_function(wrap_pyfunction!(py_moving_average, m)?)?;
     m.add_function(wrap_pyfunction!(py_savitsky_golay, m)?)?;
+    m.add_function(wrap_pyfunction!(py_fit_feature, m)?)?;
     m.add_class::<PyFittedPeak>()?;
     Ok(())
 }

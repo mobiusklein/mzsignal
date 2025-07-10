@@ -443,7 +443,7 @@ mod test {
 
         eprintln!("{} {}", pair.min_mz, pair.max_mz);
         let peaks2 = pick_peaks(&pair.mz_array, &pair.intensity_array).unwrap();
-        assert_eq!(peaks2.len(), 32);
+        assert_eq!(peaks2.len(), 30);
         let p1 = peaks
             .iter()
             .max_by(|a, b| a.intensity.total_cmp(&b.intensity))
@@ -476,7 +476,7 @@ mod test {
 
         eprintln!("{} {}", pair.min_mz, pair.max_mz);
         let peaks2 = pick_peaks(&pair.mz_array, &pair.intensity_array).unwrap();
-        assert_eq!(peaks2.len(), 37);
+        assert_eq!(peaks2.len(), peaks.len());
         let p1 = peaks
             .iter()
             .max_by(|a, b| a.intensity.total_cmp(&b.intensity))
@@ -498,14 +498,14 @@ mod test {
     #[test]
     fn test_top_level() {
         let peaks = prepare_peaks();
-        assert_eq!(peaks.len(), 37);
+        assert_eq!(peaks.len(), 34);
 
         let iterator = peaks.iter();
         let pair = reprofile(iterator, 0.01);
 
         eprintln!("{} {}", pair.min_mz, pair.max_mz);
         let peaks2 = pick_peaks(&pair.mz_array, &pair.intensity_array).unwrap();
-        assert_eq!(peaks2.len(), 32);
+        assert_eq!(peaks2.len(), 30);
         let p1 = peaks
             .iter()
             .max_by(|a, b| a.intensity.total_cmp(&b.intensity))
