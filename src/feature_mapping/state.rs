@@ -1034,7 +1034,7 @@ impl TarjanStronglyConnectedComponents {
     /// Iterate over the connected components of the graph. This will
     /// be an empty iterator if [`TarjanStronglyConnectedComponents::solve`]
     /// has not been called yet.
-    pub fn iter(&self) -> std::slice::Iter<Vec<usize>> {
+    pub fn iter(&self) -> std::slice::Iter<'_, Vec<usize>> {
         self.connected_components.iter()
     }
 

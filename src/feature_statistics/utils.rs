@@ -176,10 +176,10 @@ pub trait PeakShapeModelFitter<'a, 'b> {
     fn loss(&self, params: &Self::ModelType, constraints: Option<&FitConstraints>) -> f64;
 
     /// Borrow the enclosed data
-    fn data(&self) -> &PeakFitArgs;
+    fn data(&self) -> &PeakFitArgs<'_, '_>;
 
     /// Iterate over the enclosed data
-    fn iter(&self) -> PeakFitArgsIter {
+    fn iter(&self) -> PeakFitArgsIter<'_> {
         self.data().iter()
     }
 

@@ -135,7 +135,7 @@ impl MapPath {
         self.indices.is_empty()
     }
 
-    pub fn iter(&self) -> std::slice::Iter<MapLink> {
+    pub fn iter(&self) -> std::slice::Iter<'_, MapLink> {
         self.indices.iter()
     }
 

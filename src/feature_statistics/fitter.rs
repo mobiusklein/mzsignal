@@ -33,7 +33,7 @@ impl<'a, 'b, T: PeakShapeModel + Debug> PeakShapeModelFitter<'a, 'b>
         params.loss(&self.data, constraints)
     }
 
-    fn data(&self) -> &PeakFitArgs {
+    fn data(&self) -> &PeakFitArgs<'_, '_> {
         &self.data
     }
 
@@ -232,7 +232,7 @@ impl<'a> SplittingPeakShapeFitter<'a, 'a> {
             }
         });
         let chunks = data.split_at(partition_points.as_slice());
-        let should_split = chunks.iter().filter(|chunk| (chunk.len() >= 6)).count() > 1;
+        let should_split = chunks.iter().filter(|chunk| chunk.len() >= 6).count() > 1;
         (should_split, partition_points)
     }
 

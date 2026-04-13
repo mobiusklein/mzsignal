@@ -343,14 +343,14 @@ impl<'lifespan> SignalBackgroundDenoiser {
 
 /// Remove background noise from a spectrum **in-place**, returning the same slice of memory.
 /// # Arguments
-/// * `mz_array` - The m/z array for the spectrum. This _should_ be relatively evenly spaced for the
-///                assumptions of this algorithm to work, so a profile spectrum is recommended.
-/// * `intensity_array` - The intensity for each m/z in the spectrum. This buffer will be modified
-///                       in place, removing background noise using the `MasSpike` algorithm and
-///                       is carried forward as the return value.
-/// * `scale` - The multiplicity of the noise to remove. When `scale` is small, local noise levels may
-///             be exhausted in one window before the noise is appreciably depleted in the region, leading
-///             to still-noisy spectra.
+/// * `mz_array`: The m/z array for the spectrum. This _should_ be relatively evenly spaced for the
+///   assumptions of this algorithm to work, so a profile spectrum is recommended.
+/// * `intensity_array`: The intensity for each m/z in the spectrum. This buffer will be modified
+///   in place, removing background noise using the `MasSpike` algorithm and
+///   is carried forward as the return value.
+/// * `scale`: The multiplicity of the noise to remove. When `scale` is small, local noise levels may
+///   be exhausted in one window before the noise is appreciably depleted in the region, leading
+///   to still-noisy spectra.
 ///
 pub fn denoise<'b>(
     mz_array: &[f64],

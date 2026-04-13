@@ -12,7 +12,7 @@ fn main() -> io::Result<()> {
 
     denoise::denoise(&arrays.mz_array, &mut intensities, factor).unwrap();
 
-    let diff = arrays.intensity_array.iter().zip(intensities.iter()).map(|(a, b)| (*a - *b)).sum::<f32>();
+    let diff = arrays.intensity_array.iter().zip(intensities.iter()).map(|(a, b)| *a - *b).sum::<f32>();
     let total = arrays.intensity_array.iter().copied().sum::<f32>();
     eprintln!("Difference: {diff}, Total: {total}, Ratio {}", diff / total);
 

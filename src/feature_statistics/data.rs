@@ -122,7 +122,7 @@ impl<'c, 'd, 'a: 'c, 'b: 'd, 'e: 'c + 'd + 'a + 'b> PeakFitArgs<'a, 'b> {
         acc / wt
     }
 
-    pub fn rebin(&self, dx: f64) -> PeakFitArgs {
+    pub fn rebin(&self, dx: f64) -> PeakFitArgs<'_, '_> {
         let pair = crate::average::rebin(&self.time, &self.intensity, dx);
         PeakFitArgs::new(pair.mz_array, pair.intensity_array)
     }
