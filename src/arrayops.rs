@@ -46,12 +46,22 @@ pub fn trapz<
     let half = B::from(0.5).unwrap();
     let n = x.len();
     assert_eq!(y.len(), n);
-    (0..n - 2)
-        .map(|i| {
-            let delta = x[i + 1] - x[i];
-            delta.as_() * half * (y[i + 1] + y[i])
-        })
-        .sum()
+
+    match n {
+        0 | 1 => B::zero(),
+        2 => {
+            let delta = x[1] - x[0];
+            delta.as_() * half * (y[1] + y[0])
+        },
+        _ => {
+            (0..n - 2)
+                .map(|i| {
+                    let delta = x[i + 1] - x[i];
+                    delta.as_() * half * (y[i + 1] + y[i])
+                })
+                .sum()
+        }
+    }
 }
 
 pub trait MZGrid {
