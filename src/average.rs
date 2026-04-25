@@ -1195,6 +1195,26 @@ mod test {
         assert!((avg - 0.0009998319327731112).abs() < 1e-6);
     }
 
+    #[test]
+    fn test_rebin_direct() {
+        let mut avgr = SignalAverager::new(*X.first().unwrap(), *X.last().unwrap(), 0.001);
+        avgr.push(ArrayPair::from((X.as_slice(), Y.as_slice())));
+        let yhat = avgr.interpolate();
+        let pair = ArrayPair::from((avgr.mz_grid(), yhat.as_slice()));
+        let (acc, _, n) = pair
+            .mz_array()
+            .iter()
+            .copied()
+            .fold((0.0, pair.min_mz, 0), |(acc, last, n), mz| {
+                (acc + (mz - last), mz, n + 1)
+            });
+        for (i, (mz, int)) in pair.iter().enumerate() {
+            assert!(int >= 0.0, "point {mz}, {int} @ {i} intensity is negative!")
+        }
+        let avg = acc / (n as f64);
+        assert!((avg - 0.0009998319327731112).abs() < 1e-6);
+    }
+
     #[test_log::test]
     fn test_segment_grid() -> io::Result<()> {
         use crate::text::arrays_over_time_from_file;
