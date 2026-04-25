@@ -14,8 +14,6 @@ struct __m256d();
 
 #[cfg(feature = "parallelism")]
 use rayon::prelude::*;
-#[cfg(feature = "parallelism")]
-use std::sync::Mutex;
 
 use cfg_if;
 
@@ -75,12 +73,11 @@ trait MZInterpolator {
     }
 }
 
-
 struct Interpolator {}
 impl MZInterpolator for Interpolator {}
 
 pub fn interpolate(xj: f64, x: f64, xj1: f64, yj: f64, yj1: f64) -> f64 {
-    Interpolator{}.interpolate_point(xj, x, xj1, yj, yj1)
+    Interpolator {}.interpolate_point(xj, x, xj1, yj, yj1)
 }
 
 struct MonotonicBlockSearcher<'a> {
@@ -166,49 +163,62 @@ impl<'a, 'b: 'a, T: Iterator<Item = (f64, &'b mut f32)>> MonotonicBlockedIterato
         }
     }
 
+    /// Advance the block iterator
     fn next_value_from_source(&mut self) -> Option<BlockIteratorPoint> {
         self.block.next().map(|(i, (x, y))| (i, (x, y as f64)))
     }
 
+    /// Check the next block's m/z without consuming the whole block
+    fn peek_next_mz(&self) -> Option<f64> {
+        self.next_value.as_ref().map(|x| x.1 .0)
+    }
+
+    /// Advance the feeding iterator, potentially updating the block iterator as well
     fn step(&mut self) -> Option<(f64, &'b mut f32, BlockIteratorPoint)> {
-        if let Some((x, o)) = self.it.next() {
-            if let Some((vi, (vmz, vint))) = self.next_value.as_ref() {
-                if x >= *vmz {
+        // Get the next point in the feeding iterator
+        if let Some((next_mz, o)) = self.it.next() {
+            // If the underlying block iterator's next m/z is available, check and advance
+            // it until the block m/z is greater than the feeding iterator's m/z
+            while let Some(block_mz) = self.peek_next_mz() {
+                if next_mz >= block_mz {
                     self.last_value = self.current_value;
-                    self.current_value = (*vi, (*vmz, *vint));
+                    self.current_value = self.next_value.unwrap();
                     self.next_value = self.next_value_from_source();
+                } else {
+                    break;
                 }
-                Some((x, o, self.current_value))
-            } else {
-                Some((x, o, self.current_value))
             }
+            Some((next_mz, o, self.current_value))
         } else {
             None
         }
     }
 
+    /// Interpolate the next value into the feeding iterator, yielding the updated point
+    ///
+    /// This is called by [`Self::next`] via the [`Iterator`] trait.
     fn interpolant_step(&mut self) -> Option<(f64, &'b mut f32)> {
-        if let Some((mz, o, (_, (mz_j, inten_j)))) = self.step() {
-            if mz_j <= mz {
+        if let Some((mz_x, o, (_, (mz_j, inten_j)))) = self.step() {
+            if mz_j <= mz_x {
                 if let Some((_, (mz_j1, inten_j1))) = self.next_value {
-                    let inten = self.interpolate_point(mz_j, mz, mz_j1, inten_j, inten_j1);
+                    let inten = self.interpolate_point(mz_j, mz_x, mz_j1, inten_j, inten_j1);
                     *o += inten as f32;
-                    Some((mz, o))
+                    Some((mz_x, o))
                 } else {
                     let (mz_j1, inten_j1) = (mz_j, inten_j);
                     let (_, (mz_j, inten_j)) = self.last_value;
 
-                    let inten = self.interpolate_point(mz_j, mz, mz_j1, inten_j, inten_j1);
+                    let inten = self.interpolate_point(mz_j, mz_x, mz_j1, inten_j, inten_j1);
                     *o += inten as f32;
-                    Some((mz, o))
+                    Some((mz_x, o))
                 }
             } else {
                 let (mz_j1, inten_j1) = (mz_j, inten_j);
                 let (_, (mz_j, inten_j)) = self.last_value;
 
-                let inten = self.interpolate_point(mz_j, mz, mz_j1, inten_j, inten_j1);
+                let inten = self.interpolate_point(mz_j, mz_x, mz_j1, inten_j, inten_j1);
                 *o += inten as f32;
-                Some((mz, o))
+                Some((mz_x, o))
             }
         } else {
             None
@@ -266,16 +276,20 @@ impl<'a, 'b: 'a> SignalAverager<'a> {
         self.array_pairs.pop_front()
     }
 
+    /// Get the number of stacked spectra being combined
     pub fn len(&self) -> usize {
         self.array_pairs.len()
     }
 
+    /// Test if there are no spectra in the averager
     pub fn is_empty(&self) -> bool {
         self.array_pairs.is_empty()
     }
 
     /// A linear interpolation across all spectra between `start_mz` and `end_mz`, with
     /// their intensities written into `out`.
+    ///
+    /// This method does NOT use SIMD currently. It outsources a lot of it's logic to [`MonotonicBlockedIterator`].
     pub(crate) fn interpolate_into_iter(
         &self,
         out: &mut [f32],
@@ -345,6 +359,10 @@ impl<'a, 'b: 'a> SignalAverager<'a> {
         }
     }
 
+    /// An internal helper that doesn't do anything sophisticated to interpolate points
+    /// sequentially.
+    ///
+    /// This is one of the methods used as a fallback when SIMD isn't an option.
     #[inline(always)]
     fn interpolate_into_idx_seq(
         &self,
@@ -373,6 +391,8 @@ impl<'a, 'b: 'a> SignalAverager<'a> {
         }
     }
 
+    /// This is similar to [`Self::interpolate_into_index_seq`], except it tries to gently suggest to the compiler
+    /// that it could, if it truly wished, autovectorize this operation, or at the very least unroll the loop.
     #[inline(always)]
     fn interpolate_into_idx_lanes_fallback<const LANES: usize>(
         &self,
@@ -645,37 +665,6 @@ impl<'a, 'b: 'a> SignalAverager<'a> {
     }
 
     #[cfg(feature = "parallelism")]
-    #[allow(unused)]
-    pub(crate) fn interpolate_chunks_parallel_locked(&'a self, n_chunks: usize) -> Vec<f32> {
-        let result = self.create_intensity_array();
-        if self.array_pairs.is_empty() {
-            return result;
-        }
-        let n_points = self.points_between(self.mz_start, self.mz_end);
-        let locked_result = Mutex::new(result);
-        let points_per_chunk = n_points / n_chunks;
-        (0..n_chunks).into_par_iter().for_each(|i| {
-            let offset = i * points_per_chunk;
-            let (size, start_mz, end_mz) = if i == n_chunks - 1 {
-                (n_points - offset, self.mz_grid[offset], self.mz_end)
-            } else {
-                (
-                    points_per_chunk,
-                    self.mz_grid[offset],
-                    self.mz_grid[offset + points_per_chunk],
-                )
-            };
-            let mut sub = self.create_intensity_array_of_size(size);
-            self.interpolate_into_iter(&mut sub, start_mz, end_mz);
-
-            let mut out = locked_result.lock().unwrap();
-            (out[offset..offset + size]).copy_from_slice(&sub);
-        });
-        locked_result.into_inner().unwrap()
-    }
-
-    #[cfg(feature = "parallelism")]
-    #[allow(unused)]
     pub(crate) fn interpolate_chunks_parallel(&'a self, n_chunks: usize) -> Vec<f32> {
         let mut result = self.create_intensity_array();
         if self.array_pairs.is_empty() {
@@ -689,7 +678,10 @@ impl<'a, 'b: 'a> SignalAverager<'a> {
         intensity_chunks[..]
             .par_iter_mut()
             .zip(mz_chunks[..].par_iter())
-            .for_each(|(mut intensity_chunk, mz_chunk)| {
+            .for_each(|(intensity_chunk, mz_chunk)| {
+                if mz_chunk.is_empty() {
+                    return;
+                }
                 let start_mz = mz_chunk.first().unwrap();
                 // The + 1e-6 is just a gentle push to get interpolate_into to roll over to the last position in the chunk
                 let end_mz = mz_chunk.last().unwrap() + 1e-6;
@@ -717,7 +709,6 @@ impl<'a, 'b: 'a> SignalAverager<'a> {
         result
     }
 
-    #[allow(unused)]
     pub fn interpolate_iter(&'a self) -> Vec<f32> {
         let mut result = self.create_intensity_array();
         self.interpolate_into_iter(&mut result, self.mz_start, self.mz_end);
@@ -882,20 +873,19 @@ impl<'a, 'lifespan: 'a> SegmentGridSignalAverager<'lifespan> {
             .binary_search_by(|block| block.time.total_cmp(&time));
         match i {
             Ok(i) => Some(i),
-            Err(i) => (i.saturating_sub(2)..(i + 2).min(self.array_pairs.len()))
-                .min_by(|i, j| {
-                    let err_i = self
-                        .array_pairs
-                        .get(*i)
-                        .map(|block| (block.time - time).abs())
-                        .unwrap_or(f64::INFINITY);
-                    let err_j = self
-                        .array_pairs
-                        .get(*j)
-                        .map(|block| (block.time - time).abs())
-                        .unwrap_or(f64::INFINITY);
-                    err_i.total_cmp(&err_j)
-                }),
+            Err(i) => (i.saturating_sub(2)..(i + 2).min(self.array_pairs.len())).min_by(|i, j| {
+                let err_i = self
+                    .array_pairs
+                    .get(*i)
+                    .map(|block| (block.time - time).abs())
+                    .unwrap_or(f64::INFINITY);
+                let err_j = self
+                    .array_pairs
+                    .get(*j)
+                    .map(|block| (block.time - time).abs())
+                    .unwrap_or(f64::INFINITY);
+                err_i.total_cmp(&err_j)
+            }),
         }
     }
 
@@ -1142,7 +1132,11 @@ mod test {
         let mut averager = SignalAverager::new(low_mz, high_mz, 0.001);
         averager.extend(scans.clone());
 
-        let _yhat = averager.interpolate();
+        let yhat = averager.interpolate();
+        for (i, y) in yhat.iter().enumerate() {
+            assert!(*y >= 0.0, "{y} @ {i} is negative!");
+        }
+
         Ok(())
     }
 
@@ -1152,25 +1146,6 @@ mod test {
         averager.push(ArrayPair::wrap(&X, &Y));
         let yhat = averager.interpolate_chunks(3);
         // text::arrays_to_file(ArrayPair::wrap(&averager.mz_grid, &yhat), "chunked_iter.txt").unwrap();
-        let picker = PeakPicker::default();
-        let mut acc = Vec::new();
-        picker
-            .discover_peaks(&averager.mz_grid, &yhat, &mut acc)
-            .expect("Signal can be picked");
-        let mzs = [180.0633881, 181.06387399204235, 182.06404644991485];
-        for (i, (peak, mz)) in acc.iter().zip(mzs.iter()).enumerate() {
-            let diff = peak.mz - mz;
-            assert!((peak.mz - mz).abs() < 1e-4, "Diff {} on peak {i}", diff);
-            assert!(peak.intensity > 0.0);
-        }
-    }
-
-    #[test]
-    #[cfg(feature = "parallelism")]
-    fn test_rebin_parallel_locked() {
-        let mut averager = SignalAverager::new(X[0], X[X.len() - 1], 0.00001);
-        averager.push(ArrayPair::wrap(&X, &Y));
-        let yhat = averager.interpolate_chunks_parallel_locked(6);
         let picker = PeakPicker::default();
         let mut acc = Vec::new();
         picker
@@ -1206,9 +1181,16 @@ mod test {
     #[test]
     fn test_rebin() {
         let pair = rebin(&X, &Y, 0.001);
-        let (acc, _, n) = pair.mz_array().iter().copied().fold((0.0, pair.min_mz, 0), |(acc, last, n), mz| {
-            (acc + (mz - last), mz, n + 1)
-        });
+        let (acc, _, n) = pair
+            .mz_array()
+            .iter()
+            .copied()
+            .fold((0.0, pair.min_mz, 0), |(acc, last, n), mz| {
+                (acc + (mz - last), mz, n + 1)
+            });
+        for (i, (mz, int)) in pair.iter().enumerate() {
+            assert!(int >= 0.0, "point {mz}, {int} @ {i} intensity is negative!")
+        }
         let avg = acc / (n as f64);
         assert!((avg - 0.0009998319327731112).abs() < 1e-6);
     }
@@ -1243,7 +1225,8 @@ mod test {
             .collect();
 
         t_blocks.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let mut averager = SegmentGridSignalAverager::from_iter(200.0, 2000.0, 0.001, t_blocks.into_iter());
+        let mut averager =
+            SegmentGridSignalAverager::from_iter(200.0, 2000.0, 0.001, t_blocks.into_iter());
         averager.array_pairs.sort();
 
         // log::info!("Start averaging");
