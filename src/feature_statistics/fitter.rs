@@ -64,10 +64,11 @@ impl<'a, 'b, T: PeakShapeModel + Debug> PeakShapeModelFitter<'a, 'b>
         let mut constraints_ref = None;
 
         if config.use_constraints {
-            constraints = constraints.width_boundary(end_t - start_t)
-            .center_lower_bound(start_t)
-            .center_upper_bound(end_t)
-            .weight(0.1);
+            constraints = constraints
+                .width_boundary(end_t - start_t)
+                .center_lower_bound(start_t)
+                .center_upper_bound(end_t)
+                .weight(0.1);
             constraints_ref = Some(&constraints);
         };
 
@@ -140,6 +141,9 @@ impl<'a, 'b, T: PeakShapeModel + Debug> PeakShapeFitter<'a, 'b, T> {
     }
 }
 
+/// Types implementing this trait opt into presenting methods for fitting peak shape models
+///
+/// They must already be able to be reference converted to [`PeakFitArgs`]
 pub trait FitPeaksOn<'a>
 where
     PeakFitArgs<'a, 'a>: From<&'a Self>,
@@ -313,5 +317,93 @@ impl<'a> SplittingPeakShapeFitter<'a, 'a> {
     /// See [`PeakShapeFitter::score`]
     pub fn score(&self) -> f64 {
         self.peak_fits.score(&self.data)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct KMeans<'a, 'b> {
+    pub data: PeakFitArgs<'a, 'b>,
+    pub k: usize,
+    pub means: Vec<(f64, f64)>,
+}
+
+#[allow(unused)]
+impl<'a, 'b> KMeans<'a, 'b> {
+    pub fn new(data: PeakFitArgs<'a, 'b>, k: usize) -> Self {
+        let mut this = Self {
+            data,
+            k,
+            means: Vec::new(),
+        };
+        this.init_means();
+        this
+    }
+
+    fn init_means(&mut self) {
+        self.means.clear();
+        let min = self.data.time.first().copied().unwrap_or_default();
+        let max = self.data.time.last().copied().unwrap_or_default();
+        let step = (max - min) / self.k as f64;
+        let mut means = crate::gridspace(min, max, step);
+        if means.len() > self.k {
+            means.truncate(self.k);
+        } else if means.len() < self.k {
+            while means.len() < self.k {
+                means.push(means.last().copied().map(|v| v + step).unwrap_or_default());
+            }
+        }
+        for mean in means {
+            let i = self.data.find_time(mean);
+            let y = self.data.get(i).1 as f64;
+            self.means.push((mean, y))
+        }
+    }
+
+    fn mean_distances(&self, x: f64, y: f64) -> impl Iterator<Item = (usize, f64)> + '_ {
+        self.means
+            .iter()
+            .copied()
+            .enumerate()
+            .map(move |(ci, (cx, cy))| (ci, ((cx - x).powi(2) + (cy - y).powi(2)).sqrt()))
+    }
+
+    fn nearest_mean(&self, x: f64, y: f64) -> (usize, f64) {
+        self.mean_distances(x, y)
+            .reduce(|a, b| if a.1 < b.1 { a } else { b })
+            .unwrap_or_else(|| (0, f64::INFINITY))
+    }
+
+    pub fn score(&self) -> f64 {
+        self.data.iter().map(|(x, y)| {
+            let (_ci, dist) = self.nearest_mean(x, y);
+            dist
+        }).reduce(|a, b| {
+            a + b
+        }).unwrap_or_default()
+    }
+
+    pub fn fit(&mut self, max_iter: usize) {
+        for i in 0..max_iter {
+            self.update_fit();
+        }
+    }
+
+    fn update_fit(&mut self) {
+        let mut bins: Vec<_> = core::iter::repeat_n(Vec::new(), self.k).collect();
+        self.data.iter().for_each(|(x, y)| {
+            let (ci, _dist) = self.nearest_mean(x, y);
+            bins[ci].push((x, y));
+        });
+
+        self.means = bins.into_iter().map(|bin| {
+            let size_k = bin.len();
+            if size_k == 0 {
+                return Default::default()
+            }
+            let (mx, my) = bin.into_iter().reduce(|(mx, my), (x, y)| {
+                ((mx + x), (my + y))
+            }).unwrap_or_default();
+            (mx / size_k as f64, my / size_k as f64)
+        }).collect();
     }
 }

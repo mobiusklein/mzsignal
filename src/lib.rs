@@ -96,6 +96,7 @@ pub mod search;
 pub mod text;
 pub mod feature_statistics;
 pub mod prelude;
+pub mod similarity;
 
 #[cfg(test)]
 mod test_data;
