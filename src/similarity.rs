@@ -237,11 +237,14 @@ impl<'a, 'b> BinnedProfile<'a, 'b> {
         let self_needs_norm = self.cached_self_normalizer.is_none();
         let other_needs_norm = other.cached_self_normalizer.is_none();
 
+        #[cfg(target_arch = "x86_64")]
         let (total, denom_lhs, denom_rhs) = if std::arch::is_x86_feature_detected!("avx2") {
             Self::dot_product(chunks_lhs, chunks_rhs, self_needs_norm, other_needs_norm)
         } else {
             Self::dot_product(chunks_lhs, chunks_rhs, self_needs_norm, other_needs_norm)
         };
+        #[cfg(not(target_arch = "x86_64"))]
+        let (total, denom_lhs, denom_rhs) = Self::dot_product(chunks_lhs, chunks_rhs, self_needs_norm, other_needs_norm);
 
         let denom_lhs: f32 = if self_needs_norm {
             denom_lhs
