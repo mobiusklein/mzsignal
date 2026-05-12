@@ -1,3 +1,21 @@
+//! A set of tools for computing similarity between peak lists or profiles.
+//!
+//! # Overview
+//!
+//! [`BinnedProfile`] is method suitable for comparing peaks or profiles, binning all signal within a
+//! narrow range of values
+//!
+//! [`AlignablePeakSetLike`] is a shared trait for performing gapped [spectral alignment](https://ccms-ucsd.github.io/GNPSDocumentation/massspecbackground/networkingtheory/)
+//! - [`AlignablePeakSet`]: Primary coordinate is [`MZ`]
+//! - [`DeconvolvedAlignablePeakSet`]: Primary coordinate is [`Mass`], constrained to matching [`KnownCharge`] between matched peaks
+//!
+//! # Similarity calculation
+//!
+//! Currently, these methods all use cosine similarity:
+//!
+//! ```math
+//! sim(X, Y) = \frac{\sum(x_{int} \times y_{int})}{\sqrt{\sum{x_{int}^2}}\sqrt{\sum{y_{int}^2}}}
+//! ```
 use std::{borrow::Cow, collections::HashSet};
 
 use mzpeaks::{
@@ -206,7 +224,9 @@ impl<'a, 'b> BinnedProfile<'a, 'b> {
 
     /// Compute the cosine similarity with the other `other`
     ///
-    /// TODO: Write the equation
+    /// ```math
+    /// sim(X, Y) = \frac{\sum(x_{int} \times y_{int})}{\sqrt{\sum{x_{int}^2}}\sqrt{\sum{y_{int}^2}}}
+    /// ```
     pub fn cosine_similarity(
         &self,
         other: &BinnedProfile<'_, '_>,
@@ -265,44 +285,59 @@ impl<'a, 'b> BinnedProfile<'a, 'b> {
 const PROTON: f64 = 1.00727646677;
 
 #[inline]
-pub fn mass_charge_ratio(mass: f64, z: i32) -> f64 {
+fn mass_charge_ratio(mass: f64, z: i32) -> f64 {
     (mass + z as f64 * PROTON) / (z.abs() as f64)
 }
 
+/// A set of common behaviors for aligning peak lists
 pub trait AlignablePeakSetLike<P: IndexedCoordinate<C> + IntensityMeasurement, C> {
+    /// Get an immutable reference to the peak list
     fn peaks(&self) -> &PeakSetVec<P, C>;
+    /// Iterate over the peak list
     fn iter(&self) -> core::slice::Iter<'_, P>;
+    /// Get the neutral mass of the precursor ion mass
     fn parent_mass(&self) -> f64;
+    /// Get the charge state of the precursor ion if one is available
     fn parent_charge(&self) -> Option<i32>;
+    /// Apply a mutating transforming function to the peak list, dropping any peak which the
+    /// transform does not return `true`
     fn transform(&mut self, transform: impl FnMut(&mut P) -> bool);
+    /// Pre-compute the normalizing factor for this peak list using [`Self::squared_normalizer`]
     fn precompute_normalizer(&mut self);
 
+    /// Borrow the peak list as a slice
     fn as_slice<'a>(&'a self) -> &'a [P] where C: 'a {
         self.peaks().as_slice()
     }
 
+    /// Compute the sum of squared intensity of the peak list
     fn squared_normalizer(&self) -> f32 {
         self.iter().map(|p| p.intensity().powi(2)).sum()
     }
 
+    /// Fetch the pre-computed normalizer as set by [`Self::precompute_normalizer`] or call [`Self::squared_normalizer`]
     fn get_normalizer_or_compute(&self) -> f32 {
         self.squared_normalizer()
     }
 
+    /// Get the precursor ion m/z if there is a charge state otherwise this just returns [`Self::parent_mass`]
     fn parent_mz(&self) -> f64 {
         self.parent_charge()
             .map(|z| mass_charge_ratio(self.parent_mass(), z))
             .unwrap_or(self.parent_mass())
     }
 
+    /// The length of the peak list
     fn len(&self) -> usize {
         self.peaks().len()
     }
 
+    /// Test if the peak list is empty
     fn is_empty(&self) -> bool {
         self.peaks().is_empty()
     }
 
+    /// See [`Self::search_sorted_all_indices_into`], but allocates storage
     fn search_sorted_all_indices(
         &self,
         queries: &[P],
@@ -314,6 +349,8 @@ pub trait AlignablePeakSetLike<P: IndexedCoordinate<C> + IntensityMeasurement, C
         acc
     }
 
+    /// Search for index pairs between [`Self::peaks`] and `queries` with `error_tolerance` units, optionally
+    /// separated by a delta of `offset`, accumulating into `accumulator`.
     fn search_sorted_all_indices_into(
         &self,
         queries: &[P],
@@ -349,12 +386,19 @@ pub trait AlignablePeakSetLike<P: IndexedCoordinate<C> + IntensityMeasurement, C
 
     }
 
+    /// Helper method [`Self::search_sorted_all_indices`] with an `offset` equal to `self.parent_mass() - other.parent_mass()`
     fn overlaps(&self, other: &Self, error_tolerance: Tolerance) -> Vec<(usize, usize)> {
         let offset = self.parent_mass() - other.parent_mass();
         self.search_sorted_all_indices(other.as_slice(), error_tolerance, offset)
     }
 
-    fn _similarity_score(&self, other: &Self, mut iis: Vec<(usize, usize)>) -> f32 {
+    fn _overlaps_into(&self, other: &Self, error_tolerance: Tolerance, accumulator: &mut Vec<(usize, usize)>) {
+        let offset = self.parent_mass() - other.parent_mass();
+        accumulator.clear();
+        self.search_sorted_all_indices_into(other.as_slice(), error_tolerance, offset, accumulator)
+    }
+
+    fn _similarity_score(&self, other: &Self, iis: &mut Vec<(usize, usize)>) -> f32 {
         iis.sort_by(|a, b| {
             let aw = self.peaks().get_item(a.0).intensity() * other.peaks().get_item(a.1).intensity();
             let bw = self.peaks().get_item(b.0).intensity() * other.peaks().get_item(b.1).intensity();
@@ -363,7 +407,7 @@ pub trait AlignablePeakSetLike<P: IndexedCoordinate<C> + IntensityMeasurement, C
         let mut mask: HashSet<(Option<usize>, Option<usize>)> =
             HashSet::with_capacity(iis.len() / 2);
         let mut score = 0.0;
-        for (i, j) in iis {
+        for (i, j) in iis.iter().copied() {
             if mask.contains(&(Some(i), None)) || mask.contains(&(None, Some(j))) {
                 continue;
             }
@@ -379,15 +423,36 @@ pub trait AlignablePeakSetLike<P: IndexedCoordinate<C> + IntensityMeasurement, C
         score / (lhs_norm * rhs_norm)
     }
 
+    /// Compute the cosine similarity with `other`, permitting an alignment gap of `self.parent_mass() - other.parent_mass()`.
+    ///
+    /// This allocates all intermediate storage.
+    ///
+    /// ```math
+    /// sim(X, Y) = \frac{\sum(x_{int} \times y_{int})}{\sqrt{\sum{x_{int}^2}}\sqrt{\sum{y_{int}^2}}}
+    /// ```
     fn similarity(&self, other: &Self, error_tolerance: Tolerance) -> f32 {
-        let iis = self.overlaps(other, error_tolerance);
-        self._similarity_score(other, iis)
+        let mut accumulator = Vec::new();
+        self.similarity_into(other, error_tolerance, &mut accumulator)
+    }
+
+    /// Compute the cosine similarity with `other`, permitting an alignment gap of `self.parent_mass() - other.parent_mass()`.
+    ///
+    /// This re-uses intermediate storage provided as `accumulator`.
+    ///
+    /// ```math
+    /// sim(X, Y) = \frac{\sum(x_{int} \times y_{int})}{\sqrt{\sum{x_{int}^2}}\sqrt{\sum{y_{int}^2}}}
+    /// ```
+    fn similarity_into(&self, other: &Self, error_tolerance: Tolerance, accumulator: &mut Vec<(usize, usize)>) -> f32 {
+        self._overlaps_into(other, error_tolerance, accumulator);
+        self._similarity_score(other, accumulator)
     }
 }
 
+
+/// Alignable peak list indexed by [`MZ`]
 #[derive(Debug, Clone, Default)]
 pub struct AlignablePeakSet<P: IndexedCoordinate<MZ> + IntensityMeasurement> {
-    pub peaks: PeakSetVec<P, MZ>,
+    pub(crate) peaks: PeakSetVec<P, MZ>,
     pub parent_mass: f64,
     pub parent_charge: Option<i32>,
     normalizer: Option<f32>,
@@ -433,14 +498,33 @@ impl<P: IndexedCoordinate<MZ> + IntensityMeasurement + IntensityMeasurementMut>
             }
         }
 
+    /// Compute the cosine similarity with `other`, permitting an alignment gap of `self.parent_mass() - other.parent_mass()`.
+    ///
+    /// This allocates all intermediate storage.
+    ///
+    /// ```math
+    /// sim(X, Y) = \frac{\sum(x_{int} \times y_{int})}{\sqrt{\sum{x_{int}^2}}\sqrt{\sum{y_{int}^2}}}
+    /// ```
     pub fn similarity(&self, other: &Self, error_tolerance: Tolerance) -> f32 {
         AlignablePeakSetLike::similarity(self, other, error_tolerance)
     }
+
+    /// Compute the cosine similarity with `other`, permitting an alignment gap of `self.parent_mass() - other.parent_mass()`.
+    ///
+    /// This re-uses intermediate storage provided as `accumulator`.
+    ///
+    /// ```math
+    /// sim(X, Y) = \frac{\sum(x_{int} \times y_{int})}{\sqrt{\sum{x_{int}^2}}\sqrt{\sum{y_{int}^2}}}
+    /// ```
+    pub fn similarity_into(&self, other: &Self, error_tolerance: Tolerance, accumulator: &mut Vec<(usize, usize)>) -> f32 {
+        AlignablePeakSetLike::similarity_into(self, other, error_tolerance, accumulator)
+    }
 }
 
+/// Alignable peak list indexed by [`Mass`], where peaks may only match if they share the same [`KnownCharge`] value.
 #[derive(Debug, Clone, Default)]
 pub struct DeconvolvedAlignablePeakSet<P: IndexedCoordinate<Mass> + IntensityMeasurement + KnownCharge> {
-    pub peaks: PeakSetVec<P, Mass>,
+    pub(crate) peaks: PeakSetVec<P, Mass>,
     pub parent_mass: f64,
     pub parent_charge: Option<i32>,
     normalizer: Option<f32>,
@@ -451,8 +535,26 @@ impl<P: IndexedCoordinate<Mass> + IntensityMeasurement + KnownCharge> Deconvolve
         Self { peaks, parent_mass, parent_charge, normalizer }
     }
 
+    /// Compute the cosine similarity with `other`, permitting an alignment gap of `self.parent_mass() - other.parent_mass()`.
+    ///
+    /// This allocates all intermediate storage.
+    ///
+    /// ```math
+    /// sim(X, Y) = \frac{\sum(x_{int} \times y_{int})}{\sqrt{\sum{x_{int}^2}}\sqrt{\sum{y_{int}^2}}}
+    /// ```
     pub fn similarity(&self, other: &Self, error_tolerance: Tolerance) -> f32 {
         AlignablePeakSetLike::similarity(self, other, error_tolerance)
+    }
+
+    /// Compute the cosine similarity with `other`, permitting an alignment gap of `self.parent_mass() - other.parent_mass()`.
+    ///
+    /// This re-uses intermediate storage provided as `accumulator`.
+    ///
+    /// ```math
+    /// sim(X, Y) = \frac{\sum(x_{int} \times y_{int})}{\sqrt{\sum{x_{int}^2}}\sqrt{\sum{y_{int}^2}}}
+    /// ```
+    pub fn similarity_into(&self, other: &Self, error_tolerance: Tolerance, accumulator: &mut Vec<(usize, usize)>) -> f32 {
+        AlignablePeakSetLike::similarity_into(self, other, error_tolerance, accumulator)
     }
 }
 
