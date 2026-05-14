@@ -289,6 +289,19 @@ fn mass_charge_ratio(mass: f64, z: i32) -> f64 {
     (mass + z as f64 * PROTON) / (z.abs() as f64)
 }
 
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PeakPair {
+    pub query_index: usize,
+    pub matched_index: usize
+}
+
+impl PeakPair {
+    pub fn new(query_index: usize, matched_index: usize) -> Self {
+        Self { query_index, matched_index }
+    }
+}
+
 /// A set of common behaviors for aligning peak lists
 pub trait AlignablePeakSetLike<P: IndexedCoordinate<C> + IntensityMeasurement, C> {
     /// Get an immutable reference to the peak list
@@ -343,7 +356,7 @@ pub trait AlignablePeakSetLike<P: IndexedCoordinate<C> + IntensityMeasurement, C
         queries: &[P],
         error_tolerance: Tolerance,
         offset: f64,
-    ) -> Vec<(usize, usize)> {
+    ) -> Vec<PeakPair> {
         let mut acc = Vec::new();
         self.search_sorted_all_indices_into(queries, error_tolerance, offset, &mut acc);
         acc
@@ -356,7 +369,7 @@ pub trait AlignablePeakSetLike<P: IndexedCoordinate<C> + IntensityMeasurement, C
         queries: &[P],
         error_tolerance: Tolerance,
         offset: f64,
-        accumulator: &mut Vec<(usize, usize)>,
+        accumulator: &mut Vec<PeakPair>,
     ) {
         let mut checkpoint: usize = 0;
         let n = self.peaks().len();
@@ -376,7 +389,7 @@ pub trait AlignablePeakSetLike<P: IndexedCoordinate<C> + IntensityMeasurement, C
                 if coord < lb_for_check {
                     checkpoint = ref_i;
                 } else if (coord > lb && coord < ub) || (coord > lb_offset && coord < ub_offset) {
-                    accumulator.push((query_i, ref_i))
+                    accumulator.push(PeakPair::new(query_i, ref_i))
                 } else if coord > ub_for_check {
                     break;
                 }
@@ -387,33 +400,33 @@ pub trait AlignablePeakSetLike<P: IndexedCoordinate<C> + IntensityMeasurement, C
     }
 
     /// Helper method [`Self::search_sorted_all_indices`] with an `offset` equal to `self.parent_mass() - other.parent_mass()`
-    fn overlaps(&self, other: &Self, error_tolerance: Tolerance) -> Vec<(usize, usize)> {
+    fn overlaps(&self, other: &Self, error_tolerance: Tolerance) -> Vec<PeakPair> {
         let offset = self.parent_mass() - other.parent_mass();
         self.search_sorted_all_indices(other.as_slice(), error_tolerance, offset)
     }
 
-    fn _overlaps_into(&self, other: &Self, error_tolerance: Tolerance, accumulator: &mut Vec<(usize, usize)>) {
+    fn _overlaps_into(&self, other: &Self, error_tolerance: Tolerance, accumulator: &mut Vec<PeakPair>) {
         let offset = self.parent_mass() - other.parent_mass();
         accumulator.clear();
         self.search_sorted_all_indices_into(other.as_slice(), error_tolerance, offset, accumulator)
     }
 
-    fn _similarity_score(&self, other: &Self, iis: &mut Vec<(usize, usize)>) -> f32 {
+    fn _similarity_score(&self, other: &Self, iis: &mut Vec<PeakPair>) -> f32 {
         iis.sort_by(|a, b| {
-            let aw = self.peaks().get_item(a.0).intensity() * other.peaks().get_item(a.1).intensity();
-            let bw = self.peaks().get_item(b.0).intensity() * other.peaks().get_item(b.1).intensity();
+            let aw = self.peaks().get_item(a.matched_index).intensity() * other.peaks().get_item(a.query_index).intensity();
+            let bw = self.peaks().get_item(b.matched_index).intensity() * other.peaks().get_item(b.query_index).intensity();
             bw.total_cmp(&aw)
         });
         let mut mask: HashSet<(Option<usize>, Option<usize>)> =
             HashSet::with_capacity(iis.len() / 2);
         let mut score = 0.0;
-        for (i, j) in iis.iter().copied() {
-            if mask.contains(&(Some(i), None)) || mask.contains(&(None, Some(j))) {
+        for PeakPair { query_index, matched_index } in iis.iter().copied() {
+            if mask.contains(&(Some(matched_index), None)) || mask.contains(&(None, Some(query_index))) {
                 continue;
             }
-            mask.insert((Some(i), None));
-            mask.insert((None, Some(j)));
-            score += self.peaks().get_item(i).intensity() * other.peaks().get_item(j).intensity();
+            mask.insert((Some(matched_index), None));
+            mask.insert((None, Some(query_index)));
+            score += self.peaks().get_item(matched_index).intensity() * other.peaks().get_item(query_index).intensity();
         }
         let lhs_norm = self
             .get_normalizer_or_compute().sqrt();
@@ -442,7 +455,7 @@ pub trait AlignablePeakSetLike<P: IndexedCoordinate<C> + IntensityMeasurement, C
     /// ```math
     /// sim(X, Y) = \frac{\sum(x_{int} \times y_{int})}{\sqrt{\sum{x_{int}^2}}\sqrt{\sum{y_{int}^2}}}
     /// ```
-    fn similarity_into(&self, other: &Self, error_tolerance: Tolerance, accumulator: &mut Vec<(usize, usize)>) -> f32 {
+    fn similarity_into(&self, other: &Self, error_tolerance: Tolerance, accumulator: &mut Vec<PeakPair>) -> f32 {
         self._overlaps_into(other, error_tolerance, accumulator);
         self._similarity_score(other, accumulator)
     }
@@ -516,7 +529,7 @@ impl<P: IndexedCoordinate<MZ> + IntensityMeasurement + IntensityMeasurementMut>
     /// ```math
     /// sim(X, Y) = \frac{\sum(x_{int} \times y_{int})}{\sqrt{\sum{x_{int}^2}}\sqrt{\sum{y_{int}^2}}}
     /// ```
-    pub fn similarity_into(&self, other: &Self, error_tolerance: Tolerance, accumulator: &mut Vec<(usize, usize)>) -> f32 {
+    pub fn similarity_into(&self, other: &Self, error_tolerance: Tolerance, accumulator: &mut Vec<PeakPair>) -> f32 {
         AlignablePeakSetLike::similarity_into(self, other, error_tolerance, accumulator)
     }
 }
@@ -553,7 +566,7 @@ impl<P: IndexedCoordinate<Mass> + IntensityMeasurement + KnownCharge> Deconvolve
     /// ```math
     /// sim(X, Y) = \frac{\sum(x_{int} \times y_{int})}{\sqrt{\sum{x_{int}^2}}\sqrt{\sum{y_{int}^2}}}
     /// ```
-    pub fn similarity_into(&self, other: &Self, error_tolerance: Tolerance, accumulator: &mut Vec<(usize, usize)>) -> f32 {
+    pub fn similarity_into(&self, other: &Self, error_tolerance: Tolerance, accumulator: &mut Vec<PeakPair>) -> f32 {
         AlignablePeakSetLike::similarity_into(self, other, error_tolerance, accumulator)
     }
 }
@@ -589,7 +602,7 @@ impl<P: IndexedCoordinate<Mass> + IntensityMeasurement + KnownCharge> AlignableP
         queries: &[P],
         error_tolerance: Tolerance,
         offset: f64,
-        accumulator: &mut Vec<(usize, usize)>,
+        accumulator: &mut Vec<PeakPair>,
     )
     {
         let mut checkpoint: usize = 0;
@@ -613,7 +626,7 @@ impl<P: IndexedCoordinate<Mass> + IntensityMeasurement + KnownCharge> AlignableP
                 } else if ((coord > lb && coord < ub) || (coord > lb_offset && coord < ub_offset))
                     && q_charge == p.charge()
                 {
-                    accumulator.push((query_i, ref_i))
+                    accumulator.push(PeakPair::new(query_i, ref_i))
                 } else if coord > ub_for_check {
                     break;
                 }
@@ -638,14 +651,7 @@ mod test {
     fn test_bin_construction() {
         let data = ArrayPairSplit::wrap(&X, &Y);
         let bins = BinnedProfile::bin_from(&data, 0.1);
-        eprintln!(
-            "generated {} bins from {} to {}",
-            bins.mz_array().len(),
-            bins.mz_array().first().unwrap(),
-            bins.mz_array().last().unwrap()
-        );
         assert_eq!(bins.mz_array().len(), 59);
-        eprintln!("{}-{}", data.min_mz, data.max_mz);
     }
 
     #[test_log::test]
