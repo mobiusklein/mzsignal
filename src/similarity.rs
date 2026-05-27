@@ -493,6 +493,10 @@ impl<P: IndexedCoordinate<MZ> + IntensityMeasurement> AlignablePeakSetLike<P, MZ
         self.peaks.peaks.retain_mut(transform);
     }
 
+    fn get_normalizer_or_compute(&self) -> f32 {
+        self.normalizer.unwrap_or_else(|| self.squared_normalizer())
+    }
+
     fn precompute_normalizer(&mut self) {
         self.normalizer = Some(self.squared_normalizer());
     }
@@ -595,6 +599,10 @@ impl<P: IndexedCoordinate<Mass> + IntensityMeasurement + KnownCharge> AlignableP
 
     fn precompute_normalizer(&mut self) {
         self.normalizer = Some(self.squared_normalizer());
+    }
+
+    fn get_normalizer_or_compute(&self) -> f32 {
+        self.normalizer.unwrap_or_else(|| self.squared_normalizer())
     }
 
     fn search_sorted_all_indices_into(
