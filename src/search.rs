@@ -32,7 +32,7 @@ pub fn nearest_left<T: Float>(vec: &[T], target_val: T, start_index: usize) -> u
 pub fn nearest_right<T: Float>(vec: &[T], target_val: T, start_index: usize) -> usize {
     let mut nearest_index = start_index;
     let mut next_index = start_index;
-    let n = vec.len() - 1;
+    let n = vec.len().saturating_sub(1);
     if next_index >= n {
         return n;
     }
@@ -40,15 +40,16 @@ pub fn nearest_right<T: Float>(vec: &[T], target_val: T, start_index: usize) -> 
     let mut best_distance = (next_val - target_val).abs();
     while next_val < target_val {
         next_index += 1;
+        if next_index == n {
+            break;
+        }
         next_val = vec[next_index];
         let dist = (next_val - target_val).abs();
         if dist < best_distance {
             best_distance = dist;
             nearest_index = next_index;
         }
-        if next_index == n {
-            break;
-        }
+
     }
     nearest_index
 }
@@ -111,7 +112,10 @@ pub fn nearest_right<T: Float>(vec: &[T], target_val: T, start_index: usize) -> 
 // }
 
 pub fn nearest(vec: &[MZ], target_val: MZ, _start_index: usize) -> usize {
-    let n = vec.len() - 1;
+    let n = vec.len().saturating_sub(1);
+    if n == 0 {
+        return 0
+    }
 
     if target_val > vec[n] {
         return n;

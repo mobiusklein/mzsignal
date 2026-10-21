@@ -252,6 +252,9 @@ impl PeakPicker {
         let signal_to_noise_threshold = self.signal_to_noise_threshold;
 
         let n = mz_array.len().saturating_sub(1);
+        if n == 0 {
+            return Ok(0)
+        }
         let m = peak_accumulator.len();
 
         let start_index = cmp::max(nearest(mz_array, start_mz, 0), 1);

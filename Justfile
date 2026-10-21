@@ -22,3 +22,13 @@ asm:
 docmath:
     cargo clean --doc
     RUSTDOCFLAGS="--html-in-header doc/katex.html" cargo doc --lib --no-deps -v
+
+
+maturin-dev:
+    maturin develop -m "./bindings/pymzsignal/Cargo.toml"
+
+maturin:
+    maturin develop --release -m "./bindings/pymzsignal/Cargo.toml"
+
+pytest: maturin-dev
+    pytest -v -s ./bindings/pymzsignal/
